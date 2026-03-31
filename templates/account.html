@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% block title %}Account — Time Track OJT{% endblock %}
+{% block content %}
+<header class="page-header">
+  <h2>Account</h2>
+  <p class="page-header__lead muted">Browse batches, open a trainee, then enter your password. Click a session’s time in or time out to add a goal or accomplishment for that session.</p>
+</header>
+
+<div class="card" id="step-batches">
+  <div class="form-row">
+    <label for="batch-search">Search batches</label>
+    <input type="text" id="batch-search" placeholder="Filter by name…" autocomplete="off">
+  </div>
+  <div id="batch-list"></div>
+</div>
+
+<div class="card hidden" id="step-users">
+  <button type="button" class="secondary" id="btn-back-batches">← Batches</button>
+  <h3 class="card-title card-title--spaced" id="users-batch-title"></h3>
+  <div id="user-list"></div>
+</div>
+
+<div class="modal-backdrop hidden" id="pwd-modal">
+  <div class="modal">
+    <h3 class="card-title">Enter password</h3>
+    <p class="muted" id="pwd-for-name"></p>
+    <div class="form-row">
+      <input type="password" id="pwd-input" autocomplete="current-password" placeholder="Password">
+    </div>
+    <div class="error hidden" id="pwd-error"></div>
+    <button type="button" id="pwd-submit">Unlock</button>
+    <button type="button" class="secondary" id="pwd-cancel" style="margin-left:0.5rem">Cancel</button>
+  </div>
+</div>
+
+<div class="card hidden" id="step-detail">
+  <button type="button" class="secondary" id="btn-back-users">← People in batch</button>
+  <button type="button" class="secondary" id="btn-logout-account" style="margin-left:0.5rem">Lock account</button>
+  <h3 class="card-title card-title--spaced" id="detail-name"></h3>
+  <p class="muted" id="detail-meta"></p>
+  <div class="grid-2" style="margin-top:1rem">
+    <div>
+      <div class="muted">Time spent</div>
+      <div class="stat" id="detail-spent"></div>
+    </div>
+    <div>
+      <div class="muted">Time left</div>
+      <div class="stat" id="detail-left"></div>
+    </div>
+  </div>
+  <p class="muted" style="margin-top:1rem">SR-Code: <code id="detail-sr-code"></code></p>
+  <a class="btn" id="btn-download-id" href="#" download="OJT-ID.png">Download OJT ID card</a>
+  <p class="muted" style="margin-top:0.5rem">PNG with your QR on the official ID layout (for printing).</p>
+  <h4 class="section-heading">Time in / Time out</h4>
+  <p class="muted section-heading__lead">Click <strong>time in</strong> or <strong>time out</strong> on a row to write a goal or accomplishment for that session.</p>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr><th>Time in</th><th>In via</th><th>Time out</th><th>Out via</th><th>Duration</th></tr>
+      </thead>
+      <tbody id="detail-entries"></tbody>
+    </table>
+  </div>
+  <div class="card card--inset hidden" id="entry-note-panel">
+    <h4 class="card-title" id="entry-note-heading">Goal &amp; accomplishment (this session)</h4>
+    <textarea id="entry-session-note" class="input-full" placeholder="What you planned or achieved during this time in/out…"></textarea>
+    <button type="button" id="btn-save-entry-note" class="btn-spaced-top">Save for this session</button>
+    <div class="success hidden" id="entry-note-saved"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  let selectedBatchId = null;
+  let selectedBatchName = '';
+  let selectedUserId = null;
+  let selectedEntryId = null;
+
+  const stepBatches = document.getElementById('step-batches');
+  const stepUsers = document.getElementById('step-users');
+  const stepDetail = document.getElementById('step-detail');
+  const batchList = document.getElementById('batch-list');
+  const userList = document.getElementById('user-list');
+  const batchSearch = document.getElementById('batch-search');
+  const pwdModal = document.getElementById('pwd-modal');
+  const pwdInput = document.getElementById('pwd-input');
+  const pwdError = document.getElementById('pwd-error');
+  const pwdForName = document.getElementById('pwd-for-name');
+
+  async function fetchBatches(q) {
+    const url = q ? '/api/batches?q=' + encodeURIComponent(q) : '/api/batches';
+    const r = await fetch(url);
+    const d = await r.json();
+    batchList.innerHTML = '';
+    if (!d.batches || d.batches.length === 0) {
+      batchList.innerHTML = '<p class="muted">No batches match.</p>';
+      return;
+    }
+    d.batches.forEach(function (b) {
+      const el = document.createElement('div');
+      el.className = 'list-item';
+      el.textContent = b.name;
+      el.addEventListener('click', function () {
+        selectedBatchId = b.id;
+        selectedBatchName = b.name;
+        showUsers();
+      });
+      batchList.appendChild(el);
+    });
+  }
+
+  batchSearch.addEventListener('input', function () {
+    fetchBatches(batchSearch.value.trim());
+  });
+  fetchBatches('');
+
+  document.getElementById('btn-back-batches').addEventListener('click', function () {
+    stepUsers.classList.add('hidden');
+    stepBatches.classList.remove('hidden');
+    stepDetail.classList.add('hidden');
+  });
+
+  document.getElementById('btn-back-users').addEventListener('click', function () {
+    stepDetail.classList.add('hidden');
+    stepUsers.classList.remove('hidden');
+    showUsers();
+  });
+
+  async function showUsers() {
+    stepBatches.classList.add('hidden');
+    stepUsers.classList.remove('hidden');
+    stepDetail.classList.add('hidden');
+    document.getElementById('users-batch-title').textContent = selectedBatchName;
+    const r = await fetch('/api/account/batch/' + selectedBatchId + '/users');
+    const d = await r.json();
+    userList.innerHTML = '';
+    if (!d.users || d.users.length === 0) {
+      userList.innerHTML = '<p class="muted">No trainees in this batch.</p>';
+      return;
+    }
+    d.users.forEach(function (u) {
+      const el = document.createElement('div');
+      el.className = 'list-item';
+      el.innerHTML = '<strong>' + escapeHtml(u.name) + '</strong><br><span class="muted">' + escapeHtml(u.course) + '</span>';
+      el.addEventListener('click', function () {
+        selectedUserId = u.id;
+        pwdForName.textContent = u.name;
+        pwdModal.classList.remove('hidden');
+        pwdInput.value = '';
+        pwdError.classList.add('hidden');
+        pwdInput.focus();
+      });
+      userList.appendChild(el);
+    });
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  document.getElementById('pwd-cancel').addEventListener('click', function () {
+    pwdModal.classList.add('hidden');
+  });
+
+  document.getElementById('pwd-submit').addEventListener('click', async function () {
+    pwdError.classList.add('hidden');
+    const r = await fetch('/api/account/user/' + selectedUserId + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwdInput.value }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      pwdError.textContent = data.error || 'Login failed';
+      pwdError.classList.remove('hidden');
+      return;
+    }
+    pwdModal.classList.add('hidden');
+    await loadDetail();
+  });
+
+  document.getElementById('btn-logout-account').addEventListener('click', async function () {
+    await fetch('/api/account/logout', { method: 'POST' });
+    stepDetail.classList.add('hidden');
+    stepUsers.classList.remove('hidden');
+    showUsers();
+  });
+
+  async function loadDetail() {
+    const r = await fetch('/api/account/user/' + selectedUserId + '/detail');
+    if (r.status === 401) {
+      pwdModal.classList.remove('hidden');
+      return null;
+    }
+    const d = await r.json();
+    if (!r.ok) return null;
+    stepUsers.classList.add('hidden');
+    stepBatches.classList.add('hidden');
+    stepDetail.classList.remove('hidden');
+    const u = d.user;
+    document.getElementById('detail-name').textContent = u.name;
+    document.getElementById('detail-meta').textContent = u.course + ' · ' + u.department + ' · ' + u.batch_name +
+      ' · Required: ' + u.required_hours + 'h';
+    document.getElementById('detail-sr-code').textContent = u.sr_code || '';
+    const idLink = document.getElementById('btn-download-id');
+    idLink.href = '/api/account/user/' + selectedUserId + '/id-card';
+    document.getElementById('detail-spent').innerHTML =
+      '<span>' + escapeHtml(d.spent_label) + '</span> <span class="muted">(' + d.spent_hours + 'h ' + d.spent_minutes + 'm)</span>';
+    document.getElementById('detail-left').innerHTML =
+      '<span>' + escapeHtml(d.left_label) + '</span> <span class="muted">(' + d.left_hours + 'h ' + d.left_minutes + 'm)</span>';
+    const tbody = document.getElementById('detail-entries');
+    tbody.innerHTML = '';
+    document.getElementById('entry-note-panel').classList.add('hidden');
+    selectedEntryId = null;
+    document.getElementById('entry-note-saved').classList.add('hidden');
+
+    (d.entries || []).forEach(function (e) {
+      const tr = document.createElement('tr');
+      const tdIn = document.createElement('td');
+      const btnIn = document.createElement('button');
+      btnIn.type = 'button';
+      btnIn.className = 'session-pick-btn';
+      btnIn.textContent = e.time_in;
+      btnIn.addEventListener('click', function () {
+        openEntryNotePanel(e);
+      });
+      tdIn.appendChild(btnIn);
+
+      const tdOut = document.createElement('td');
+      const btnOut = document.createElement('button');
+      btnOut.type = 'button';
+      btnOut.className = 'session-pick-btn';
+      btnOut.textContent = e.time_out || '—';
+      btnOut.disabled = !e.time_out;
+      if (e.time_out) {
+        btnOut.addEventListener('click', function () {
+          openEntryNotePanel(e);
+        });
+      }
+      tdOut.appendChild(btnOut);
+
+      const tdInVia = document.createElement('td');
+      tdInVia.className = 'muted';
+      tdInVia.textContent = e.time_in_method_label || '—';
+
+      const tdOutVia = document.createElement('td');
+      tdOutVia.className = 'muted';
+      tdOutVia.textContent = e.time_out ? (e.time_out_method_label || '—') : '—';
+
+      const tdDur = document.createElement('td');
+      tdDur.appendChild(document.createTextNode(e.duration_label));
+      if (e.session_note && e.session_note.trim()) {
+        tdDur.appendChild(document.createTextNode(' '));
+        const dot = document.createElement('span');
+        dot.className = 'muted';
+        dot.title = 'Has a note for this session';
+        dot.textContent = '·';
+        tdDur.appendChild(dot);
+      }
+
+      tr.appendChild(tdIn);
+      tr.appendChild(tdInVia);
+      tr.appendChild(tdOut);
+      tr.appendChild(tdOutVia);
+      tr.appendChild(tdDur);
+      tbody.appendChild(tr);
+    });
+    return d;
+  }
+
+  function openEntryNotePanel(e) {
+    selectedEntryId = e.id;
+    const panel = document.getElementById('entry-note-panel');
+    const out = e.time_out || '(still open)';
+    document.getElementById('entry-note-heading').textContent =
+      'Goal & accomplishment — ' + e.time_in + ' → ' + out;
+    document.getElementById('entry-session-note').value = e.session_note || '';
+    document.getElementById('entry-note-saved').classList.add('hidden');
+    panel.classList.remove('hidden');
+    document.getElementById('entry-session-note').focus();
+  }
+
+  document.getElementById('btn-save-entry-note').addEventListener('click', async function () {
+    if (selectedEntryId === null) return;
+    const el = document.getElementById('entry-note-saved');
+    el.classList.add('hidden');
+    const noteVal = document.getElementById('entry-session-note').value;
+    const r = await fetch(
+      '/api/account/user/' + selectedUserId + '/entry/' + selectedEntryId + '/note',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_note: noteVal }),
+      }
+    );
+    if (r.ok) {
+      await loadDetail();
+    } else {
+      el.textContent = 'Could not save (session expired?)';
+      el.classList.remove('hidden');
+    }
+  });
+})();
+</script>
+{% endblock %}

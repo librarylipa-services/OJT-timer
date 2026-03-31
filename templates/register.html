@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Register — Time Track OJT{% endblock %}
+{% block content %}
+<div class="register-page">
+<header class="page-header page-header--register">
+  <h2>Register</h2>
+  <p class="page-header__lead muted">Create your OJT profile. An admin must create a batch before you can register.</p>
+</header>
+
+<form id="reg-form" class="card form-register" autocomplete="on">
+  <div class="form-register__head">
+    <h3 class="form-register__title">Trainee details</h3>
+    <p class="form-register__sub muted">Your SR-Code is stored in your QR for clock in/out at Home.</p>
+  </div>
+  <div class="form-register__grid">
+    <div class="form-row">
+      <label class="label-field" for="sr_code">SR-Code</label>
+      <input type="text" id="sr_code" name="sr_code" required autocomplete="off" placeholder="School-issued student ID">
+      <p class="field-hint muted">Encoded in your QR — same value scanned or typed at Home.</p>
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="name">Full name</label>
+      <input type="text" id="name" name="name" required autocomplete="name" placeholder="As it appears on records">
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="gender">Gender</label>
+      <select id="gender" name="gender" required>
+        <option value="Female">Female</option>
+        <option value="Male">Male</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="department">Department</label>
+      <input type="text" id="department" name="department" required placeholder="e.g. CCS">
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="course">Course</label>
+      <input type="text" id="course" name="course" required placeholder="Program or major">
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="batch_id">OJT batch</label>
+      <select id="batch_id" name="batch_id" required>
+        <option value="">Loading batches…</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="required_hours">Required OJT hours</label>
+      <input type="number" id="required_hours" name="required_hours" min="1" step="1" required placeholder="e.g. 500">
+    </div>
+    <div class="form-row">
+      <label class="label-field" for="password">Account password</label>
+      <input type="password" id="password" name="password" required autocomplete="new-password" placeholder="Choose a strong password">
+      <p class="field-hint muted">Used to unlock your Account page and session notes.</p>
+    </div>
+  </div>
+  <div class="form-register__actions">
+    <button type="submit" class="form-register__submit">Register</button>
+    <div class="error hidden" id="reg-error"></div>
+    <div class="success hidden" id="reg-success"></div>
+  </div>
+</form>
+
+<div class="card form-register-success hidden" id="qr-card">
+  <div class="form-register-success__layout">
+    <div class="form-register-success__qr">
+      <h3 class="card-title">Your QR code</h3>
+      <div class="qr-frame">
+        <img id="qr-img" alt="QR code">
+      </div>
+    </div>
+    <div class="form-register-success__copy">
+      <p class="muted">Save or print this code on your ID. At <strong>Home</strong>, staff can scan it or you can type your SR-Code manually.</p>
+      <p class="field-hint muted">SR-Code (scanned value)</p>
+      <code id="qr-token" class="code-block"></code>
+    </div>
+  </div>
+</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const batchSelect = document.getElementById('batch_id');
+  const form = document.getElementById('reg-form');
+  const regError = document.getElementById('reg-error');
+  const regSuccess = document.getElementById('reg-success');
+  const qrCard = document.getElementById('qr-card');
+  const qrImg = document.getElementById('qr-img');
+  const qrToken = document.getElementById('qr-token');
+
+  async function loadBatches() {
+    const r = await fetch('/api/batches');
+    const d = await r.json();
+    batchSelect.innerHTML = '';
+    if (!d.batches || d.batches.length === 0) {
+      batchSelect.innerHTML = '<option value="">No batches — ask admin to create one</option>';
+      batchSelect.disabled = true;
+      return;
+    }
+    batchSelect.appendChild(new Option('Select batch…', ''));
+    d.batches.forEach(function (b) {
+      batchSelect.appendChild(new Option(b.name, String(b.id)));
+    });
+  }
+  loadBatches();
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    regError.classList.add('hidden');
+    regSuccess.classList.add('hidden');
+    const body = {
+      sr_code: document.getElementById('sr_code').value.trim(),
+      name: document.getElementById('name').value.trim(),
+      gender: document.getElementById('gender').value,
+      department: document.getElementById('department').value.trim(),
+      course: document.getElementById('course').value.trim(),
+      batch_id: document.getElementById('batch_id').value,
+      required_hours: document.getElementById('required_hours').value,
+      password: document.getElementById('password').value,
+    };
+    try {
+      const r = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        regError.textContent = data.error || 'Registration failed';
+        regError.classList.remove('hidden');
+        return;
+      }
+      regSuccess.textContent = 'Registered successfully.';
+      regSuccess.classList.remove('hidden');
+      qrCard.classList.remove('hidden');
+      qrImg.src = data.qr_url + '&t=' + Date.now();
+      qrToken.textContent = data.sr_code;
+      form.reset();
+      loadBatches();
+    } catch (err) {
+      regError.textContent = 'Network error';
+      regError.classList.remove('hidden');
+    }
+  });
+})();
+</script>
+{% endblock %}

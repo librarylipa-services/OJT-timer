@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="application-name" content="Time Track OJT — LibSys">
+  <meta name="apple-mobile-web-app-title" content="Time Track OJT">
+  <meta name="description" content="OJT attendance: time in/out by QR or SR-Code. LibSys.">
+  <title>{% block title %}Time Track OJT — LibSys{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="sidebar-brand__mark" aria-hidden="true">TT</span>
+        <div class="sidebar-brand__text">
+          <span class="sidebar-brand__title">Time Track OJT</span>
+          <span class="sidebar-brand__tag">LibSys</span>
+        </div>
+      </div>
+      <nav class="sidebar-nav" aria-label="Main">
+        <a href="{{ url_for('page_home') }}" class="{{ 'active' if request.path == '/' else '' }}">Home</a>
+        <a href="{{ url_for('page_register') }}" class="{{ 'active' if request.path == '/register' else '' }}">Register</a>
+        <a href="{{ url_for('page_account') }}" class="{{ 'active' if request.path == '/account' else '' }}">Account</a>
+        <a href="{{ url_for('page_admin') }}" class="{{ 'active' if request.path == '/admin' else '' }}">Admin</a>
+      </nav>
+    </aside>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,455 @@
+{% extends "base.html" %}
+{% block title %}Admin — Time Track OJT{% endblock %}
+{% block content %}
+<header class="page-header">
+  <h2>Admin</h2>
+  <p class="page-header__lead muted">Password defaults to <code>Melo1234</code> unless you set environment variable <code>OJT_ADMIN_PASSWORD</code>. Change it in production.</p>
+</header>
+
+<div class="card" id="admin-login-panel">
+  <h3 class="card-title">Sign in</h3>
+  <div class="form-row">
+    <label for="admin-pwd">Admin password</label>
+    <input type="password" id="admin-pwd" autocomplete="current-password">
+  </div>
+  <button type="button" id="btn-admin-login">Login</button>
+  <div class="error hidden" id="admin-login-error"></div>
+</div>
+
+<div id="admin-app" class="hidden">
+  <div class="card">
+    <button type="button" class="secondary" id="btn-admin-logout">Logout</button>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title">Create batch</h3>
+    <div class="form-row">
+      <label for="new-batch-name">Batch name</label>
+      <input type="text" id="new-batch-name" placeholder="e.g. OJT 2026 – Group A">
+    </div>
+    <button type="button" id="btn-create-batch">Create</button>
+    <div class="error hidden" id="batch-create-error"></div>
+    <div class="success hidden" id="batch-create-ok"></div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title">Batches</h3>
+    <p class="muted card-lead">Click a batch to list its trainees. Use “All trainees” to show everyone.</p>
+    <div id="admin-batch-list"></div>
+  </div>
+
+  <div class="card">
+    <h3 class="card-title">Trainees <span class="muted" id="trainees-filter-label"></span></h3>
+    <div class="form-row">
+      <input type="text" id="user-search" placeholder="Search name, course, batch…">
+    </div>
+    <div id="admin-user-list"></div>
+  </div>
+
+  <div class="card hidden" id="admin-user-panel">
+    <button type="button" class="secondary" id="btn-close-user">← Back to list</button>
+    <h3 class="card-title card-title--spaced" id="edit-user-title"></h3>
+    <p class="muted" id="edit-user-stats"></p>
+    <div class="form-row form-row--tight-top">
+      <a class="btn" id="btn-admin-download-id" href="#" download="OJT-ID.png">Download OJT ID card</a>
+      <p class="muted field-hint">Same printable PNG as on Account (QR on BSU template).</p>
+    </div>
+    <div class="form-row">
+      <label>SR-Code (encoded in QR)</label>
+      <input type="text" id="edit-sr-code" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label>Name</label>
+      <input type="text" id="edit-name">
+    </div>
+    <div class="form-row">
+      <label>Gender</label>
+      <select id="edit-gender">
+        <option value="Female">Female</option>
+        <option value="Male">Male</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Department</label>
+      <input type="text" id="edit-department">
+    </div>
+    <div class="form-row">
+      <label>Course</label>
+      <input type="text" id="edit-course">
+    </div>
+    <div class="form-row">
+      <label>Batch</label>
+      <select id="edit-batch"></select>
+    </div>
+    <div class="form-row">
+      <label>Required hours</label>
+      <input type="number" id="edit-hours" min="1" step="1">
+    </div>
+    <div class="form-row">
+      <label>New password (optional)</label>
+      <input type="password" id="edit-password" placeholder="Leave blank to keep">
+    </div>
+    <div class="form-row">
+      <label>Goal</label>
+      <textarea id="edit-goal"></textarea>
+    </div>
+    <div class="form-row">
+      <label>Accomplishment</label>
+      <textarea id="edit-accomplishment"></textarea>
+    </div>
+    <button type="button" id="btn-save-user">Save profile</button>
+    <div class="success hidden" id="user-save-ok"></div>
+    <div class="error hidden" id="user-save-err"></div>
+
+    <h4 class="section-heading section-heading--loose">Time entries</h4>
+    <p class="muted">Edit time in/out (local ISO). Empty time out = open session.</p>
+    <div class="table-responsive">
+      <table>
+        <thead>
+          <tr><th>Time in</th><th>In via</th><th>Time out</th><th>Out via</th><th>Duration</th><th>Session note</th><th></th></tr>
+        </thead>
+        <tbody id="admin-entries-body"></tbody>
+      </table>
+    </div>
+    <h4 class="section-heading">Add entry</h4>
+    <div class="grid-2">
+      <div class="form-row">
+        <label>Time in</label>
+        <input type="datetime-local" id="new-entry-in">
+      </div>
+      <div class="form-row">
+        <label>Time out (optional)</label>
+        <input type="datetime-local" id="new-entry-out">
+      </div>
+    </div>
+    <button type="button" id="btn-add-entry">Add entry</button>
+    <div class="error hidden" id="entry-err"></div>
+
+    <p class="muted field-hint field-hint--block">QR image URL:</p>
+    <code id="edit-qr-url" style="word-break:break-all;font-size:0.85rem"></code>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  let currentUserId = null;
+  let selectedAdminBatchId = null;
+  let selectedAdminBatchName = '';
+
+  function toLocalInput(iso) {
+    if (!iso) return '';
+    return iso.slice(0, 16);
+  }
+  function fromLocalInput(val) {
+    if (!val) return '';
+    return val.length === 16 ? val + ':00' : val;
+  }
+
+  document.getElementById('btn-admin-login').addEventListener('click', async function () {
+    const err = document.getElementById('admin-login-error');
+    err.classList.add('hidden');
+    const r = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: document.getElementById('admin-pwd').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      err.textContent = d.error || 'Failed';
+      err.classList.remove('hidden');
+      return;
+    }
+    document.getElementById('admin-login-panel').classList.add('hidden');
+    document.getElementById('admin-app').classList.remove('hidden');
+    loadAdminBatches();
+    loadUserList();
+  });
+
+  document.getElementById('btn-admin-logout').addEventListener('click', async function () {
+    await fetch('/api/admin/logout', { method: 'POST' });
+    document.getElementById('admin-app').classList.add('hidden');
+    document.getElementById('admin-login-panel').classList.remove('hidden');
+    document.getElementById('admin-pwd').value = '';
+  });
+
+  document.getElementById('btn-create-batch').addEventListener('click', async function () {
+    const name = document.getElementById('new-batch-name').value.trim();
+    const errEl = document.getElementById('batch-create-error');
+    const okEl = document.getElementById('batch-create-ok');
+    errEl.classList.add('hidden');
+    okEl.classList.add('hidden');
+    const r = await fetch('/api/admin/batches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      errEl.textContent = d.error || 'Failed';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    okEl.textContent = 'Batch created.';
+    okEl.classList.remove('hidden');
+    document.getElementById('new-batch-name').value = '';
+    loadAdminBatches();
+  });
+
+  function updateTraineesFilterLabel() {
+    const el = document.getElementById('trainees-filter-label');
+    if (selectedAdminBatchId === null) {
+      el.textContent = '';
+    } else {
+      el.textContent = '— ' + selectedAdminBatchName;
+    }
+  }
+
+  async function loadAdminBatches() {
+    const r = await fetch('/api/admin/batches');
+    if (r.status === 403) {
+      document.getElementById('admin-app').classList.add('hidden');
+      document.getElementById('admin-login-panel').classList.remove('hidden');
+      return;
+    }
+    const d = await r.json();
+    const batches = d.batches || [];
+    const box = document.getElementById('admin-batch-list');
+    box.innerHTML = '';
+
+    const allEl = document.createElement('div');
+    allEl.className = 'list-item' + (selectedAdminBatchId === null ? ' active' : '');
+    allEl.innerHTML = '<strong>All trainees</strong><br><span class="muted">Every batch</span>';
+    allEl.addEventListener('click', async function () {
+      selectedAdminBatchId = null;
+      selectedAdminBatchName = '';
+      updateTraineesFilterLabel();
+      await loadAdminBatches();
+      loadUserList();
+    });
+    box.appendChild(allEl);
+
+    batches.forEach(function (b) {
+      const el = document.createElement('div');
+      el.className = 'list-item' + (selectedAdminBatchId === b.id ? ' active' : '');
+      el.innerHTML = '<strong>' + escapeHtml(b.name) + '</strong><br><span class="muted">' +
+        b.trainee_count + ' trainee' + (b.trainee_count === 1 ? '' : 's') + '</span>';
+      el.addEventListener('click', async function () {
+        selectedAdminBatchId = b.id;
+        selectedAdminBatchName = b.name;
+        updateTraineesFilterLabel();
+        await loadAdminBatches();
+        loadUserList();
+      });
+      box.appendChild(el);
+    });
+  }
+
+  let searchTimer = null;
+  document.getElementById('user-search').addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadUserList, 300);
+  });
+
+  async function loadUserList() {
+    const q = document.getElementById('user-search').value.trim();
+    const parts = [];
+    if (q) parts.push('q=' + encodeURIComponent(q));
+    if (selectedAdminBatchId !== null) parts.push('batch_id=' + selectedAdminBatchId);
+    const url = parts.length ? '/api/admin/users?' + parts.join('&') : '/api/admin/users';
+    const r = await fetch(url);
+    if (r.status === 403) {
+      document.getElementById('admin-app').classList.add('hidden');
+      document.getElementById('admin-login-panel').classList.remove('hidden');
+      return;
+    }
+    const d = await r.json();
+    const box = document.getElementById('admin-user-list');
+    box.innerHTML = '';
+    const users = d.users || [];
+    if (users.length === 0) {
+      box.innerHTML = '<p class="muted">No trainees match this filter.</p>';
+      return;
+    }
+    users.forEach(function (u) {
+      const el = document.createElement('div');
+      el.className = 'list-item';
+      el.innerHTML = '<strong>' + escapeHtml(u.name) + '</strong> — ' + escapeHtml(u.course) +
+        '<br><span class="muted">' + escapeHtml(u.batch_name) + '</span>';
+      el.addEventListener('click', function () { openUser(u.id); });
+      box.appendChild(el);
+    });
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  document.getElementById('btn-close-user').addEventListener('click', function () {
+    document.getElementById('admin-user-panel').classList.add('hidden');
+    loadUserList();
+  });
+
+  async function openUser(uid) {
+    currentUserId = uid;
+    const r = await fetch('/api/admin/user/' + uid);
+    if (!r.ok) return;
+    const d = await r.json();
+    const u = d.user;
+    document.getElementById('admin-user-panel').classList.remove('hidden');
+    document.getElementById('edit-user-title').textContent = u.name;
+    document.getElementById('edit-user-stats').innerHTML =
+      'Spent: <strong>' + escapeHtml(d.spent_label) + '</strong> (' + d.spent_hours + 'h ' + d.spent_minutes + 'm) · ' +
+      'Left: <strong>' + escapeHtml(d.left_label) + '</strong> (' + d.left_hours + 'h ' + d.left_minutes + 'm)';
+    document.getElementById('edit-sr-code').value = u.sr_code || '';
+    document.getElementById('edit-name').value = u.name;
+    document.getElementById('edit-gender').value =
+      u.gender === 'Male' || u.gender === 'Female' ? u.gender : 'Female';
+    document.getElementById('edit-department').value = u.department;
+    document.getElementById('edit-course').value = u.course;
+    document.getElementById('edit-hours').value = u.required_hours;
+    document.getElementById('edit-goal').value = u.goal_text || '';
+    document.getElementById('edit-accomplishment').value = u.accomplishment_text || '';
+    document.getElementById('edit-password').value = '';
+    document.getElementById('edit-qr-url').textContent =
+      window.location.origin + '/api/qr?code=' + encodeURIComponent(u.sr_code || '');
+    document.getElementById('btn-admin-download-id').href =
+      '/api/admin/user/' + uid + '/id-card';
+
+    const sel = document.getElementById('edit-batch');
+    sel.innerHTML = '';
+    (d.batches || []).forEach(function (b) {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = b.name;
+      if (b.id === u.batch_id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+
+    document.getElementById('user-save-ok').classList.add('hidden');
+    document.getElementById('user-save-err').classList.add('hidden');
+    await loadEntries();
+  }
+
+  async function loadEntries() {
+    const r = await fetch('/api/admin/user/' + currentUserId + '/entries');
+    const d = await r.json();
+    const tbody = document.getElementById('admin-entries-body');
+    tbody.innerHTML = '';
+    (d.entries || []).forEach(function (e) {
+      const tr = document.createElement('tr');
+      const inId = 'ein-' + e.id;
+      const outId = 'eout-' + e.id;
+      const noteId = 'enote-' + e.id;
+      var outVia =
+        e.time_out && (e.time_out_method_label || e.time_out_method)
+          ? escapeHtml(e.time_out_method_label || '—')
+          : '—';
+      var inVia = escapeHtml(e.time_in_method_label || '—');
+      tr.innerHTML =
+        '<td><input type="datetime-local" id="' + inId + '" value="' + toLocalInput(e.time_in) + '"></td>' +
+        '<td class="method-cell muted">' + inVia + '</td>' +
+        '<td><input type="datetime-local" id="' + outId + '" value="' + toLocalInput(e.time_out) + '"></td>' +
+        '<td class="method-cell muted">' + outVia + '</td>' +
+        '<td>' + escapeHtml(e.duration_label) + '</td>' +
+        '<td><textarea id="' + noteId + '" rows="2" class="admin-entry-note"></textarea></td>' +
+        '<td><button type="button" class="secondary save-entry" data-id="' + e.id + '">Save</button> ' +
+        '<button type="button" class="danger del-entry" data-id="' + e.id + '">Delete</button></td>';
+      tbody.appendChild(tr);
+      document.getElementById(noteId).value = e.session_note || '';
+    });
+    tbody.querySelectorAll('.save-entry').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        const id = btn.getAttribute('data-id');
+        const tin = fromLocalInput(document.getElementById('ein-' + id).value);
+        const toutRaw = document.getElementById('eout-' + id).value;
+        const tout = toutRaw ? fromLocalInput(toutRaw) : null;
+        const res = await fetch('/api/admin/entry/' + id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            time_in: tin,
+            time_out: tout,
+            session_note: document.getElementById('enote-' + id).value,
+          }),
+        });
+        if (res.ok) {
+          openUser(currentUserId);
+        }
+      });
+    });
+    tbody.querySelectorAll('.del-entry').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Delete this entry?')) return;
+        const id = btn.getAttribute('data-id');
+        await fetch('/api/admin/entry/' + id, { method: 'DELETE' });
+        openUser(currentUserId);
+      });
+    });
+  }
+
+  document.getElementById('btn-save-user').addEventListener('click', async function () {
+    const errEl = document.getElementById('user-save-err');
+    const okEl = document.getElementById('user-save-ok');
+    errEl.classList.add('hidden');
+    okEl.classList.add('hidden');
+    const body = {
+      sr_code: document.getElementById('edit-sr-code').value.trim(),
+      name: document.getElementById('edit-name').value,
+      gender: document.getElementById('edit-gender').value,
+      department: document.getElementById('edit-department').value,
+      course: document.getElementById('edit-course').value,
+      batch_id: parseInt(document.getElementById('edit-batch').value, 10),
+      required_hours: parseFloat(document.getElementById('edit-hours').value),
+      goal_text: document.getElementById('edit-goal').value,
+      accomplishment_text: document.getElementById('edit-accomplishment').value,
+    };
+    const pw = document.getElementById('edit-password').value;
+    if (pw) body.password = pw;
+    const r = await fetch('/api/admin/user/' + currentUserId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      errEl.textContent = d.error || 'Save failed';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    okEl.textContent = 'Saved.';
+    okEl.classList.remove('hidden');
+    openUser(currentUserId);
+  });
+
+  document.getElementById('btn-add-entry').addEventListener('click', async function () {
+    const errEl = document.getElementById('entry-err');
+    errEl.classList.add('hidden');
+    const tin = fromLocalInput(document.getElementById('new-entry-in').value);
+    const toutRaw = document.getElementById('new-entry-out').value;
+    const tout = toutRaw ? fromLocalInput(toutRaw) : null;
+    if (!tin) {
+      errEl.textContent = 'Time in required';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const r = await fetch('/api/admin/user/' + currentUserId + '/entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ time_in: tin, time_out: tout }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      errEl.textContent = d.error || 'Failed';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    document.getElementById('new-entry-in').value = '';
+    document.getElementById('new-entry-out').value = '';
+    openUser(currentUserId);
+  });
+})();
+</script>
+{% endblock %}

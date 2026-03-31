@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+{% block title %}Home — Time Track OJT{% endblock %}
+{% block head_extra %}
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+{% endblock %}
+{% block content %}
+<header class="page-header">
+  <h2>Home</h2>
+  <p class="page-header__lead muted">Use the camera to scan your ID QR, or type your SR-Code on the right of the clock. If you have an open session, the next scan or manual entry records time out.</p>
+</header>
+
+<div class="card card--clock">
+  <div class="clock-bar">
+    <div class="clock-bar__main">
+      <div class="clock-display" id="clock-time">--:--:--</div>
+      <div class="date-display" id="clock-date">—</div>
+    </div>
+    <div class="clock-bar__side">
+      <label class="label-text" for="manual-sr-code">SR-Code (manual time in / out)</label>
+      <div class="clock-manual-row">
+        <input type="text" id="manual-sr-code" name="manual_sr_code" autocomplete="off" placeholder="Type SR-Code" maxlength="256">
+        <button type="button" id="btn-manual-clock">Time in / out</button>
+      </div>
+      <p class="clock-last muted" id="clock-last-action" aria-live="polite">No recent clock action on this device yet.</p>
+    </div>
+  </div>
+</div>
+
+<div class="card scan-desk-card">
+  <h3 class="card-title">Camera</h3>
+  <div class="scan-actions">
+    <button type="button" id="btn-start-scan">Start camera</button>
+    <button type="button" class="secondary" id="btn-stop-scan" disabled>Stop camera</button>
+  </div>
+  <div class="scan-desk-row">
+    <div class="scan-desk-cam">
+      <div id="scan-reader" class="scan-box"></div>
+    </div>
+    <aside class="scan-desk-details" aria-label="Time in and time out details">
+      <div id="scan-result-placeholder" class="scan-result-placeholder">
+        <p class="muted" style="margin:0">Time in / time out details appear here after a successful scan or manual SR-Code entry.</p>
+      </div>
+      <div id="result-card" class="scan-result-inner hidden">
+        <h3 class="card-title" id="result-action"></h3>
+        <div id="result-user"></div>
+        <div class="grid-2 scan-result-stats" style="margin-top:1rem">
+          <div>
+            <div class="muted">Time spent (total)</div>
+            <div class="stat" id="result-spent"></div>
+          </div>
+          <div>
+            <div class="muted">Time left</div>
+            <div class="stat" id="result-left"></div>
+          </div>
+        </div>
+        <div style="margin-top:1rem">
+          <div class="muted">Latest session</div>
+          <div id="result-session"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <p class="muted scan-camera-hint">Start the camera when you’re ready, allow access when prompted, and hold your ID so the QR fills most of the frame.</p>
+</div>
+
+<div class="error hidden" id="scan-error"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const clockTime = document.getElementById('clock-time');
+  const clockDate = document.getElementById('clock-date');
+  const clockLastAction = document.getElementById('clock-last-action');
+  const manualInput = document.getElementById('manual-sr-code');
+  const btnManualClock = document.getElementById('btn-manual-clock');
+  const btnStartScan = document.getElementById('btn-start-scan');
+  const btnStopScan = document.getElementById('btn-stop-scan');
+  const resultCard = document.getElementById('result-card');
+  const scanResultPlaceholder = document.getElementById('scan-result-placeholder');
+  const resultAction = document.getElementById('result-action');
+  const resultUser = document.getElementById('result-user');
+  const resultSpent = document.getElementById('result-spent');
+  const resultLeft = document.getElementById('result-left');
+  const resultSession = document.getElementById('result-session');
+  const scanError = document.getElementById('scan-error');
+
+  async function tickClock() {
+    try {
+      const r = await fetch('/api/server-time');
+      const d = await r.json();
+      clockTime.textContent = d.time_display;
+      clockDate.textContent = d.weekday + ', ' + d.date_display;
+    } catch (e) {
+      clockTime.textContent = new Date().toLocaleTimeString();
+      clockDate.textContent = new Date().toDateString();
+    }
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  function showError(msg) {
+    scanError.textContent = msg;
+    scanError.classList.remove('hidden');
+  }
+  function clearError() {
+    scanError.classList.add('hidden');
+    scanError.textContent = '';
+  }
+
+  const RESULT_VISIBLE_MS = 5000;
+  let resultHideTimer = null;
+
+  function clearResultHideTimer() {
+    if (resultHideTimer) {
+      clearTimeout(resultHideTimer);
+      resultHideTimer = null;
+    }
+  }
+
+  function hideAndResetResult() {
+    clearResultHideTimer();
+    resultCard.classList.add('hidden');
+    scanResultPlaceholder.classList.remove('hidden');
+    resultAction.textContent = '';
+    resultUser.innerHTML = '';
+    resultSpent.innerHTML = '';
+    resultLeft.innerHTML = '';
+    resultSession.innerHTML = '';
+  }
+
+  function scheduleHideResult() {
+    clearResultHideTimer();
+    resultHideTimer = setTimeout(function () {
+      resultHideTimer = null;
+      hideAndResetResult();
+    }, RESULT_VISIBLE_MS);
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function methodPill(method) {
+    var m = method || '';
+    var cls = m === 'manual' ? 'method-pill method-pill--manual' : 'method-pill method-pill--scan';
+    var label = m === 'manual' ? 'Manual' : (m === 'scan' ? 'Camera' : '—');
+    return '<span class="' + cls + '">' + escapeHtml(label) + '</span>';
+  }
+
+  function updateClockLastAction(data) {
+    var verb = data.action === 'time_in' ? 'Timed in' : 'Timed out';
+    var via = data.entry_method === 'manual' ? 'manual entry' : 'camera scan';
+    clockLastAction.innerHTML =
+      'Last on this device: <strong>' + escapeHtml(verb) + '</strong> via <strong>' + escapeHtml(via) + '</strong>.';
+  }
+
+  function applyScanResult(data) {
+    clearResultHideTimer();
+    scanResultPlaceholder.classList.add('hidden');
+    resultCard.classList.remove('hidden');
+    var verb = data.action === 'time_in' ? 'Timed in' : 'Timed out';
+    var via = data.entry_method === 'manual' ? 'Manual' : 'Camera';
+    resultAction.textContent = verb + ' · ' + via;
+    resultAction.style.color = data.action === 'time_in' ? 'var(--success)' : 'var(--warn)';
+    var u = data.user;
+    resultUser.innerHTML =
+      '<strong>' + escapeHtml(u.name) + '</strong><br>' +
+      '<span class="muted">' + escapeHtml(u.course) + ' · ' + escapeHtml(u.department) + '</span>';
+    resultSpent.innerHTML = '<span>' + escapeHtml(data.spent_label) + '</span> <span class="muted">(' +
+      data.spent_hours + 'h ' + data.spent_minutes + 'm)</span>';
+    resultLeft.innerHTML = '<span>' + escapeHtml(data.left_label) + '</span> <span class="muted">(' +
+      data.left_hours + 'h ' + data.left_minutes + 'm of ' + u.required_hours + 'h required)</span>';
+
+    var latest = data.recent_entries && data.recent_entries[0];
+    if (latest) {
+      var out = latest.time_out ? latest.time_out : '(open — still timed in)';
+      var outPill = latest.time_out ? methodPill(latest.time_out_method) : '<span class="method-pill method-pill--pending">—</span>';
+      resultSession.innerHTML =
+        '<div class="session-line">Time in: <code>' + escapeHtml(latest.time_in) + '</code> ' +
+        methodPill(latest.time_in_method) + '</div>' +
+        '<div class="session-line">Time out: <code>' + escapeHtml(String(out)) + '</code> ' + outPill + '</div>' +
+        '<div class="muted">Session duration: ' + escapeHtml(latest.duration_label) + '</div>';
+    } else {
+      resultSession.textContent = 'No entries yet.';
+    }
+    updateClockLastAction(data);
+    scheduleHideResult();
+  }
+
+  let scanCooldownUntil = 0;
+
+  async function postClock(rawCode, entryMethod) {
+    var code = (rawCode || '').trim();
+    if (!code) {
+      showError('Enter an SR-Code or scan a QR code.');
+      return;
+    }
+    var now = Date.now();
+    if (now < scanCooldownUntil) return;
+    scanCooldownUntil = now + RESULT_VISIBLE_MS + 400;
+    clearError();
+    try {
+      var body = { entry_method: entryMethod };
+      if (entryMethod === 'manual') {
+        body.sr_code = code;
+      } else {
+        body.qr_data = code;
+      }
+      var r = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      var data = await r.json();
+      if (!r.ok) {
+        scanCooldownUntil = 0;
+        hideAndResetResult();
+        showError(data.error || 'Clock action failed');
+        return;
+      }
+      applyScanResult(data);
+      if (entryMethod === 'manual') {
+        manualInput.value = '';
+      }
+    } catch (e) {
+      scanCooldownUntil = 0;
+      hideAndResetResult();
+      showError('Network error');
+    }
+  }
+
+  function onScanSuccess(decodedText) {
+    var now = Date.now();
+    if (now < scanCooldownUntil) return;
+    postClock(decodedText, 'scan');
+  }
+
+  let html5Qrcode = null;
+
+  function setScannerUiRunning(running) {
+    btnStartScan.disabled = running;
+    btnStopScan.disabled = !running;
+  }
+
+  function scanRegionConfig() {
+    return {
+      fps: 20,
+      aspectRatio: 4 / 3,
+      qrbox: function (viewfinderWidth, viewfinderHeight) {
+        var edge = Math.min(viewfinderWidth, viewfinderHeight);
+        var size = Math.floor(edge * 0.92);
+        if (size < 180) {
+          size = Math.max(160, Math.floor(edge * 0.98));
+        }
+        if (size % 2 === 1) size -= 1;
+        return { width: size, height: size };
+      },
+    };
+  }
+
+  function pickCameraId(devices) {
+    if (!devices || devices.length === 0) return null;
+    var i;
+    var label;
+    for (i = 0; i < devices.length; i++) {
+      label = (devices[i].label || '').toLowerCase();
+      if (/back|rear|environment|rück|trasera|后置|後置/.test(label)) {
+        return devices[i].id;
+      }
+    }
+    for (i = 0; i < devices.length; i++) {
+      label = (devices[i].label || '').toLowerCase();
+      if (!/front|user|facing|自拍|前置/.test(label)) {
+        return devices[i].id;
+      }
+    }
+    return devices[0].id;
+  }
+
+  function startScanner() {
+    if (typeof Html5Qrcode === 'undefined') {
+      showError('QR library failed to load.');
+      return;
+    }
+    if (html5Qrcode) return;
+    clearError();
+    html5Qrcode = new Html5Qrcode('scan-reader');
+    var cfg = scanRegionConfig();
+
+    function fail(err) {
+      showError(err.message || 'Could not start camera');
+      if (html5Qrcode) {
+        html5Qrcode.clear().catch(function () {});
+        html5Qrcode = null;
+      }
+      setScannerUiRunning(false);
+    }
+
+    html5Qrcode
+      .start({ facingMode: 'environment' }, cfg, onScanSuccess, function () {})
+      .catch(function () {
+        return Html5Qrcode.getCameras().then(function (devices) {
+          if (!devices || devices.length === 0) {
+            throw new Error('No camera found.');
+          }
+          var camId = pickCameraId(devices);
+          return html5Qrcode.start(camId, cfg, onScanSuccess, function () {});
+        });
+      })
+      .then(function () {
+        setScannerUiRunning(true);
+      })
+      .catch(fail);
+  }
+
+  btnStartScan.addEventListener('click', function () {
+    startScanner();
+  });
+
+  btnStopScan.addEventListener('click', function () {
+    if (!html5Qrcode) return;
+    html5Qrcode
+      .stop()
+      .then(function () {
+        return html5Qrcode.clear();
+      })
+      .then(function () {
+        html5Qrcode = null;
+        setScannerUiRunning(false);
+      })
+      .catch(function () {
+        html5Qrcode = null;
+        setScannerUiRunning(false);
+      });
+  });
+
+  btnManualClock.addEventListener('click', function () {
+    postClock(manualInput.value, 'manual');
+  });
+
+  manualInput.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      postClock(manualInput.value, 'manual');
+    }
+  });
+
+  setScannerUiRunning(false);
+})();
+</script>
+{% endblock %}

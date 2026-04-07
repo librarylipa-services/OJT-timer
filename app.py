@@ -1069,7 +1069,7 @@ def _draw_front_id_text(template, full_name, course):
     draw = ImageDraw.Draw(template)
     if name:
         up = name.upper()
-        f1 = fit_font(up, max_size=max(18, int(round(im_h * 0.04))), min_size=14)
+        f1 = fit_font(up, max_size=max(22, int(round(im_h * 0.052))), min_size=16)
         b1 = draw.textbbox((0, 0), up, font=f1)
         nx = x0 + ((x1 - x0) - (b1[2] - b1[0])) // 2
         draw.text((nx, y0), up, fill=(120, 0, 0), font=f1)
@@ -1077,7 +1077,7 @@ def _draw_front_id_text(template, full_name, course):
 
     if first:
         up1 = first.upper()
-        f2 = fit_font(up1, max_size=max(22, int(round(im_h * 0.055))), min_size=16)
+        f2 = fit_font(up1, max_size=max(26, int(round(im_h * 0.065))), min_size=18)
         b2 = draw.textbbox((0, 0), up1, font=f2)
         fx = x0 + ((x1 - x0) - (b2[2] - b2[0])) // 2
         draw.text((fx, y0), up1, fill=(120, 0, 0), font=f2)
@@ -1085,7 +1085,7 @@ def _draw_front_id_text(template, full_name, course):
 
     c = (course or "").strip()
     if c:
-        f3 = fit_font(c, max_size=max(14, int(round(im_h * 0.028))), min_size=12)
+        f3 = fit_font(c, max_size=max(18, int(round(im_h * 0.036))), min_size=13)
         b3 = draw.textbbox((0, 0), c, font=f3)
         cx = x0 + ((x1 - x0) - (b3[2] - b3[0])) // 2
         draw.text((cx, y0), c, fill=(120, 0, 0), font=f3)

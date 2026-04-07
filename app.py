@@ -43,9 +43,23 @@ def _normalize_database_url(url: str) -> str:
     return url
 
 
+def _env_first(*keys: str) -> str:
+    """Return the first non-empty env value (Vercel+Supabase uses several names)."""
+    for key in keys:
+        val = os.environ.get(key, "").strip()
+        if val:
+            return val
+    return ""
+
+
 SQLITE_DATABASE = os.path.join(BASE_DIR, "ojt.db")
-DATABASE_URL = _normalize_database_url(os.environ.get("DATABASE_URL", "").strip())
+# Vercel "Connect Supabase" often sets POSTGRES_PRISMA_URL / POSTGRES_URL instead of DATABASE_URL.
+DATABASE_URL = _normalize_database_url(
+    _env_first("DATABASE_URL", "POSTGRES_PRISMA_URL", "POSTGRES_URL")
+)
 USE_POSTGRES = bool(DATABASE_URL)
+SUPABASE_URL = _env_first("SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_ANON_KEY = _env_first("SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY")
 # ID templates live in repo-level `resources/`
 ID_FRONT_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "front_id.png")
 ID_BACK_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "back_id.png")
@@ -90,8 +104,6 @@ app.config["SECRET_KEY"] = SECRET_KEY
 if os.environ.get("VERCEL") == "1":
     app.config["SESSION_COOKIE_SECURE"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "").strip()
 app.config["SUPABASE_URL"] = SUPABASE_URL
 app.config["SUPABASE_ANON_KEY"] = SUPABASE_ANON_KEY
 
@@ -163,8 +175,8 @@ def get_db():
     if db is None:
         if os.environ.get("VERCEL") == "1" and not USE_POSTGRES:
             raise ConfigError(
-                "DATABASE_URL is not set on Vercel. Add it in Project Settings → Environment "
-                "Variables (same value as in .env.local). Local .env files are not deployed."
+                "No Postgres URL on Vercel. Set DATABASE_URL, or use Vercel’s Supabase integration "
+                "so POSTGRES_PRISMA_URL / POSTGRES_URL is present. Local .env.local is not deployed."
             )
         if USE_POSTGRES:
             if psycopg2 is None or RealDictCursor is None:

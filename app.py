@@ -11,8 +11,21 @@ from qrcode.constants import ERROR_CORRECT_M
 from werkzeug.security import check_password_hash, generate_password_hash
 import qrcode
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except Exception:  # pragma: no cover
+    psycopg2 = None
+    RealDictCursor = None
+
+DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
+    (psycopg2.IntegrityError,) if psycopg2 else ()
+)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE = os.path.join(BASE_DIR, "ojt.db")
+SQLITE_DATABASE = os.path.join(BASE_DIR, "ojt.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL)
 # ID templates live in repo-level `resources/`
 ID_FRONT_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "front_id.png")
 ID_BACK_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "back_id.png")
@@ -47,11 +60,61 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET_KEY
 
 
+class _DBCursor:
+    def __init__(self, cur, dialect):
+        self._cur = cur
+        self._dialect = dialect
+
+    def execute(self, query, params=None):
+        if self._dialect == "postgres":
+            query = query.replace("?", "%s")
+        if params is None:
+            return self._cur.execute(query)
+        return self._cur.execute(query, params)
+
+    def executemany(self, query, seq):
+        if self._dialect == "postgres":
+            query = query.replace("?", "%s")
+        return self._cur.executemany(query, seq)
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
+class _DBConn:
+    def __init__(self, conn, dialect):
+        self._conn = conn
+        self._dialect = dialect
+
+    def cursor(self):
+        return _DBCursor(self._conn.cursor(), self._dialect)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def close(self):
+        return self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def get_db():
     db = getattr(g, "_database", None)
     if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
+        if USE_POSTGRES:
+            if psycopg2 is None or RealDictCursor is None:
+                raise RuntimeError("psycopg2 is required when DATABASE_URL is set")
+            conn = psycopg2.connect(
+                DATABASE_URL,
+                cursor_factory=RealDictCursor,
+                connect_timeout=10,
+            )
+            db = g._database = _DBConn(conn, "postgres")
+        else:
+            conn = sqlite3.connect(SQLITE_DATABASE)
+            conn.row_factory = sqlite3.Row
+            db = g._database = _DBConn(conn, "sqlite")
     return db
 
 
@@ -63,7 +126,10 @@ def close_db(_exc):
 
 
 def init_db():
-    db = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        # Supabase Postgres schema is managed via SQL migrations (see `supabase/schema.sql`).
+        return
+    db = sqlite3.connect(SQLITE_DATABASE)
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS batches (
@@ -109,7 +175,9 @@ def init_db():
 
 def migrate_ojt_users_sr_code():
     """Add sr_code and copy from legacy qr_token for existing databases."""
-    db = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        return
+    db = sqlite3.connect(SQLITE_DATABASE)
     cur = db.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='ojt_users'"
@@ -141,7 +209,9 @@ def _ojt_user_columns(cur):
 
 
 def ensure_ojt_user_indexes():
-    db = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        return
+    db = sqlite3.connect(SQLITE_DATABASE)
     cur = db.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='ojt_users'"
@@ -160,7 +230,9 @@ def ensure_ojt_user_indexes():
 
 def migrate_ojt_users_photos():
     """Add photo filename columns for ID generation."""
-    db = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        return
+    db = sqlite3.connect(SQLITE_DATABASE)
     cur = db.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='ojt_users'"
@@ -184,7 +256,9 @@ def migrate_ojt_users_photos():
 
 
 def migrate_time_entries_session_note():
-    db = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        return
+    db = sqlite3.connect(SQLITE_DATABASE)
     cur = db.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='time_entries'"
@@ -204,7 +278,9 @@ def migrate_time_entries_session_note():
 
 def migrate_time_entries_methods():
     """Store whether time in / time out used camera scan vs manual SR-Code entry."""
-    db = sqlite3.connect(DATABASE)
+    if USE_POSTGRES:
+        return
+    db = sqlite3.connect(SQLITE_DATABASE)
     cur = db.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='time_entries'"
@@ -580,10 +656,15 @@ def api_register():
                 ),
             )
         db.commit()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERRORS:
         return jsonify({"error": "SR-Code is already registered"}), 400
 
-    uid = cur.lastrowid
+    if USE_POSTGRES:
+        cur.execute("SELECT id FROM ojt_users WHERE sr_code = ?", (sr_code,))
+        row = cur.fetchone()
+        uid = row["id"] if row else None
+    else:
+        uid = cur.lastrowid
     qr_url = f"/api/qr?code={quote(sr_code, safe='')}"
     return jsonify(
         {
@@ -1351,9 +1432,15 @@ def api_admin_create_batch():
             (name, created),
         )
         db.commit()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERRORS:
         return jsonify({"error": "Batch name already exists"}), 400
-    return jsonify({"ok": True, "id": cur.lastrowid})
+    if USE_POSTGRES:
+        cur.execute("SELECT id FROM batches WHERE name = ?", (name,))
+        row = cur.fetchone()
+        bid = row["id"] if row else None
+    else:
+        bid = cur.lastrowid
+    return jsonify({"ok": True, "id": bid})
 
 
 @app.get("/api/admin/batches")
@@ -1664,7 +1751,22 @@ def api_admin_entry_create(user_id):
         (user_id, time_in, tout),
     )
     db.commit()
-    return jsonify({"ok": True, "id": cur.lastrowid})
+    if USE_POSTGRES:
+        cur.execute(
+            """
+            SELECT id
+            FROM time_entries
+            WHERE user_id = ? AND time_in = ? AND (time_out IS NOT DISTINCT FROM ?)
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id, time_in, tout),
+        )
+        row = cur.fetchone()
+        new_id = row["id"] if row else None
+    else:
+        new_id = cur.lastrowid
+    return jsonify({"ok": True, "id": new_id})
 
 
 @app.delete("/api/admin/entry/<int:entry_id>")

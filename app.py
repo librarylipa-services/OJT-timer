@@ -3,9 +3,11 @@ import os
 import re
 import sqlite3
 from datetime import datetime, timedelta
+from decimal import Decimal
 from urllib.parse import quote
 
 from flask import Flask, g, jsonify, render_template, request, send_file, session
+from flask.json.provider import DefaultJSONProvider
 from PIL import Image, ImageDraw, ImageFont
 from qrcode.constants import ERROR_CORRECT_M
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -23,12 +25,26 @@ DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
     (psycopg2.IntegrityError,) if psycopg2 else ()
 )
 
+
+class ConfigError(Exception):
+    """Deployment or environment misconfiguration (returned as JSON on /api)."""
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv(os.path.join(BASE_DIR, ".env.local"), override=True)
 
+
+def _normalize_database_url(url: str) -> str:
+    """Supabase Postgres expects SSL; append sslmode if missing."""
+    if not url:
+        return url
+    if "supabase.co" in url and "sslmode" not in url:
+        return f"{url}{'&' if '?' in url else '?'}sslmode=require"
+    return url
+
+
 SQLITE_DATABASE = os.path.join(BASE_DIR, "ojt.db")
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATABASE_URL = _normalize_database_url(os.environ.get("DATABASE_URL", "").strip())
 USE_POSTGRES = bool(DATABASE_URL)
 # ID templates live in repo-level `resources/`
 ID_FRONT_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "front_id.png")
@@ -60,8 +76,20 @@ OJT_PORT = int(os.environ.get("OJT_PORT", "5000"))
 ALLOWED_GENDERS = frozenset({"Male", "Female"})
 ALLOWED_ENTRY_METHODS = frozenset({"scan", "manual"})
 
+
+class _AppJSONProvider(DefaultJSONProvider):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+
+
 app = Flask(__name__)
+app.json_provider_class = _AppJSONProvider
 app.config["SECRET_KEY"] = SECRET_KEY
+if os.environ.get("VERCEL") == "1":
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "").strip()
 app.config["SUPABASE_URL"] = SUPABASE_URL
@@ -74,6 +102,21 @@ def _inject_supabase_template_vars():
         "supabase_url": SUPABASE_URL,
         "supabase_anon_key": SUPABASE_ANON_KEY,
     }
+
+
+@app.errorhandler(ConfigError)
+def _handle_config_error(e):
+    return jsonify({"error": str(e)}), 500
+
+
+if psycopg2:
+
+    @app.errorhandler(psycopg2.OperationalError)
+    @app.errorhandler(psycopg2.InterfaceError)
+    def _handle_pg_connect_errors(e):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Database connection failed", "detail": str(e)}), 503
+        raise e
 
 
 class _DBCursor:
@@ -118,6 +161,11 @@ class _DBConn:
 def get_db():
     db = getattr(g, "_database", None)
     if db is None:
+        if os.environ.get("VERCEL") == "1" and not USE_POSTGRES:
+            raise ConfigError(
+                "DATABASE_URL is not set on Vercel. Add it in Project Settings → Environment "
+                "Variables (same value as in .env.local). Local .env files are not deployed."
+            )
         if USE_POSTGRES:
             if psycopg2 is None or RealDictCursor is None:
                 raise RuntimeError("psycopg2 is required when DATABASE_URL is set")
@@ -220,6 +268,15 @@ def migrate_ojt_users_sr_code():
 
 
 def _ojt_user_columns(cur):
+    if USE_POSTGRES:
+        cur.execute(
+            """
+            SELECT column_name AS cn
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'ojt_users'
+            """
+        )
+        return {r["cn"] for r in cur.fetchall()}
     cur.execute("PRAGMA table_info(ojt_users)")
     return {r[1] for r in cur.fetchall()}
 

@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from flask import Flask, g, jsonify, render_template, request, send_file, session
 from flask.json.provider import DefaultJSONProvider
+from werkzeug.exceptions import HTTPException
 from PIL import Image, ImageDraw, ImageFont
 from qrcode.constants import ERROR_CORRECT_M
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -220,6 +221,16 @@ if psycopg2:
         if request.path.startswith("/api/"):
             return jsonify({"error": "Database connection failed", "detail": str(e)}), 503
         raise e
+
+
+@app.errorhandler(Exception)
+def _handle_unexpected_exception(e):
+    # Ensure API callers don't receive HTML error pages.
+    if isinstance(e, HTTPException):
+        return e
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Internal server error", "detail": str(e)}), 500
+    raise e
 
 
 @app.get("/api/health/db")
@@ -1052,11 +1063,14 @@ def _pick_id_font(size):
 def _draw_front_id_text(template, full_name, course):
     im_w, im_h = template.size
     left, top, right, bottom = _front_photo_box(im_w, im_h)
-    y0 = min(im_h - 1, bottom + max(14, int(round(im_h * 0.014))))
-    pad_x = max(18, int(round(im_w * 0.06)))
+    # Place text into the large band below the photo (the red rectangle area in the template).
+    # Start a bit below the photo, but clamp to a stable ratio so it doesn't crowd the frame.
+    y0 = max(bottom + max(10, int(round(im_h * 0.01))), int(round(im_h * 0.63)))
+    # Reduce side padding so we can render larger fonts.
+    pad_x = max(10, int(round(im_w * 0.03)))
     x0 = pad_x
     x1 = im_w - pad_x
-    line_gap = max(6, int(round(im_h * 0.008)))
+    line_gap = max(10, int(round(im_h * 0.012)))
 
     name = (full_name or "").strip()
     if not name and not course:
@@ -1076,28 +1090,58 @@ def _draw_front_id_text(template, full_name, course):
         return _pick_id_font(min_size)
 
     draw = ImageDraw.Draw(template)
-    if name:
-        up = name.upper()
-        f1 = fit_font(up, max_size=max(88, int(round(im_h * 0.208))), min_size=32)
-        b1 = draw.textbbox((0, 0), up, font=f1)
-        nx = x0 + ((x1 - x0) - (b1[2] - b1[0])) // 2
-        draw.text((nx, y0), up, fill=(120, 0, 0), font=f1)
-        y0 += (b1[3] - b1[1]) + line_gap
+    def wrap_words_to_lines(text, max_lines):
+        words = [w for w in (text or "").split() if w]
+        if not words:
+            return []
+        lines = []
+        i = 0
+        while i < len(words) and len(lines) < max_lines:
+            line = words[i]
+            i += 1
+            while i < len(words):
+                candidate = f"{line} {words[i]}"
+                # Use a medium probe size to decide wrapping, independent of final font size.
+                probe = _pick_id_font(max(24, int(round(im_h * 0.05))))
+                bbox = draw.textbbox((0, 0), candidate, font=probe)
+                if (bbox[2] - bbox[0]) <= (x1 - x0):
+                    line = candidate
+                    i += 1
+                else:
+                    break
+            lines.append(line)
+        # If we ran out of lines but still have words, append them to the last line.
+        if i < len(words) and lines:
+            lines[-1] = (lines[-1] + " " + " ".join(words[i:])).strip()
+        return lines
 
+    # Make the first word very large, then render the rest of the name (wrapped) large too.
     if first:
         up1 = first.upper()
-        f2 = fit_font(up1, max_size=max(104, int(round(im_h * 0.26))), min_size=36)
+        f2 = fit_font(up1, max_size=max(140, int(round(im_h * 0.33))), min_size=48)
         b2 = draw.textbbox((0, 0), up1, font=f2)
         fx = x0 + ((x1 - x0) - (b2[2] - b2[0])) // 2
         draw.text((fx, y0), up1, fill=(120, 0, 0), font=f2)
         y0 += (b2[3] - b2[1]) + line_gap
 
+    if name:
+        rest = " ".join(name.split()[1:]).strip()
+        if rest:
+            for line in wrap_words_to_lines(rest.upper(), max_lines=2):
+                f1 = fit_font(line, max_size=max(92, int(round(im_h * 0.22))), min_size=34)
+                b1 = draw.textbbox((0, 0), line, font=f1)
+                nx = x0 + ((x1 - x0) - (b1[2] - b1[0])) // 2
+                draw.text((nx, y0), line, fill=(120, 0, 0), font=f1)
+                y0 += (b1[3] - b1[1]) + line_gap
+
     c = (course or "").strip()
     if c:
-        f3 = fit_font(c, max_size=max(72, int(round(im_h * 0.144))), min_size=26)
-        b3 = draw.textbbox((0, 0), c, font=f3)
-        cx = x0 + ((x1 - x0) - (b3[2] - b3[0])) // 2
-        draw.text((cx, y0), c, fill=(120, 0, 0), font=f3)
+        for line in wrap_words_to_lines(c, max_lines=2):
+            f3 = fit_font(line, max_size=max(88, int(round(im_h * 0.19))), min_size=30)
+            b3 = draw.textbbox((0, 0), line, font=f3)
+            cx = x0 + ((x1 - x0) - (b3[2] - b3[0])) // 2
+            draw.text((cx, y0), line, fill=(120, 0, 0), font=f3)
+            y0 += (b3[3] - b3[1]) + line_gap
 
 
 def _load_user_photo(photo_filename):
@@ -1379,37 +1423,56 @@ def api_account_user_update_photos(user_id):
     if not row:
         return jsonify({"error": "Not found"}), 404
 
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-    def save_image(upload, filename_prefix):
-        if not upload or getattr(upload, "filename", "") == "":
-            return ""
-        try:
-            im = Image.open(upload.stream)
-            im = im.convert("RGB")
-        except OSError:
-            raise ValueError("Invalid image file")
-        max_side = 1400
-        if max(im.size) > max_side:
-            im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-        out_name = f"{_safe_filename_stem(filename_prefix)}.png"
-        out_path = os.path.join(UPLOADS_DIR, out_name)
-        im.save(out_path, format="PNG", optimize=True)
-        return out_name
-
     updates = []
     vals = []
     try:
-        if photo and getattr(photo, "filename", ""):
-            fn = save_image(photo, f"{row['sr_code']}_photo")
-            updates.append("photo_filename = ?")
-            vals.append(fn)
-        if extra and getattr(extra, "filename", ""):
-            fn2 = save_image(extra, f"{row['sr_code']}_extra")
-            updates.append("extra_photo_filename = ?")
-            vals.append(fn2)
+        if USE_POSTGRES:
+            if photo and getattr(photo, "filename", ""):
+                fn = _image_upload_to_storage(
+                    photo,
+                    f"users/{_safe_filename_stem(row['sr_code'])}/photo.png",
+                )
+                updates.append("photo_filename = ?")
+                vals.append(fn)
+            # extra photo is optional; keep supported if client still sends it.
+            if extra and getattr(extra, "filename", ""):
+                fn2 = _image_upload_to_storage(
+                    extra,
+                    f"users/{_safe_filename_stem(row['sr_code'])}/extra.png",
+                )
+                updates.append("extra_photo_filename = ?")
+                vals.append(fn2)
+        else:
+            os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+            def save_image(upload, filename_prefix):
+                if not upload or getattr(upload, "filename", "") == "":
+                    return ""
+                try:
+                    im = Image.open(upload.stream)
+                    im = im.convert("RGB")
+                except OSError:
+                    raise ValueError("Invalid image file")
+                max_side = 1400
+                if max(im.size) > max_side:
+                    im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                out_name = f"{_safe_filename_stem(filename_prefix)}.png"
+                out_path = os.path.join(UPLOADS_DIR, out_name)
+                im.save(out_path, format="PNG", optimize=True)
+                return out_name
+
+            if photo and getattr(photo, "filename", ""):
+                fn = save_image(photo, f"{row['sr_code']}_photo")
+                updates.append("photo_filename = ?")
+                vals.append(fn)
+            if extra and getattr(extra, "filename", ""):
+                fn2 = save_image(extra, f"{row['sr_code']}_extra")
+                updates.append("extra_photo_filename = ?")
+                vals.append(fn2)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except (ConfigError, RuntimeError) as e:
+        return jsonify({"error": str(e)}), 500
 
     if not updates:
         return jsonify({"error": "No valid files uploaded"}), 400
@@ -1442,37 +1505,55 @@ def api_admin_user_update_photos(user_id):
     if not row:
         return jsonify({"error": "Not found"}), 404
 
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-    def save_image(upload, filename_prefix):
-        if not upload or getattr(upload, "filename", "") == "":
-            return ""
-        try:
-            im = Image.open(upload.stream)
-            im = im.convert("RGB")
-        except OSError:
-            raise ValueError("Invalid image file")
-        max_side = 1400
-        if max(im.size) > max_side:
-            im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-        out_name = f"{_safe_filename_stem(filename_prefix)}.png"
-        out_path = os.path.join(UPLOADS_DIR, out_name)
-        im.save(out_path, format="PNG", optimize=True)
-        return out_name
-
     updates = []
     vals = []
     try:
-        if photo and getattr(photo, "filename", ""):
-            fn = save_image(photo, f"{row['sr_code']}_photo")
-            updates.append("photo_filename = ?")
-            vals.append(fn)
-        if extra and getattr(extra, "filename", ""):
-            fn2 = save_image(extra, f"{row['sr_code']}_extra")
-            updates.append("extra_photo_filename = ?")
-            vals.append(fn2)
+        if USE_POSTGRES:
+            if photo and getattr(photo, "filename", ""):
+                fn = _image_upload_to_storage(
+                    photo,
+                    f"users/{_safe_filename_stem(row['sr_code'])}/photo.png",
+                )
+                updates.append("photo_filename = ?")
+                vals.append(fn)
+            if extra and getattr(extra, "filename", ""):
+                fn2 = _image_upload_to_storage(
+                    extra,
+                    f"users/{_safe_filename_stem(row['sr_code'])}/extra.png",
+                )
+                updates.append("extra_photo_filename = ?")
+                vals.append(fn2)
+        else:
+            os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+            def save_image(upload, filename_prefix):
+                if not upload or getattr(upload, "filename", "") == "":
+                    return ""
+                try:
+                    im = Image.open(upload.stream)
+                    im = im.convert("RGB")
+                except OSError:
+                    raise ValueError("Invalid image file")
+                max_side = 1400
+                if max(im.size) > max_side:
+                    im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                out_name = f"{_safe_filename_stem(filename_prefix)}.png"
+                out_path = os.path.join(UPLOADS_DIR, out_name)
+                im.save(out_path, format="PNG", optimize=True)
+                return out_name
+
+            if photo and getattr(photo, "filename", ""):
+                fn = save_image(photo, f"{row['sr_code']}_photo")
+                updates.append("photo_filename = ?")
+                vals.append(fn)
+            if extra and getattr(extra, "filename", ""):
+                fn2 = save_image(extra, f"{row['sr_code']}_extra")
+                updates.append("extra_photo_filename = ?")
+                vals.append(fn2)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except (ConfigError, RuntimeError) as e:
+        return jsonify({"error": str(e)}), 500
 
     if not updates:
         return jsonify({"error": "No valid files uploaded"}), 400

@@ -131,6 +131,33 @@ if psycopg2:
         raise e
 
 
+@app.get("/api/health/db")
+def api_health_db():
+    """
+    Debug endpoint: verifies DB connectivity and basic table presence.
+    Returns JSON so Vercel issues are visible in-browser via Network tab.
+    """
+    db = get_db()
+    cur = db.cursor()
+    if USE_POSTGRES:
+        cur.execute(
+            """
+            SELECT table_name AS t
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN ('batches', 'ojt_users', 'time_entries')
+            ORDER BY table_name
+            """
+        )
+        tables = [r["t"] for r in cur.fetchall()]
+    else:
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('batches','ojt_users','time_entries')"
+        )
+        tables = [r["name"] for r in cur.fetchall()]
+    return jsonify({"ok": True, "dialect": ("postgres" if USE_POSTGRES else "sqlite"), "tables": tables})
+
+
 class _DBCursor:
     def __init__(self, cur, dialect):
         self._cur = cur

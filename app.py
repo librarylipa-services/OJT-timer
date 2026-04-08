@@ -209,6 +209,37 @@ def _image_upload_to_storage(upload, object_path: str) -> str:
     return object_path
 
 
+def _save_user_profile_photo(upload, sr_code: str, *, slot: str) -> str:
+    """
+    Profile image for ojt_users.photo_filename / extra_photo_filename.
+    With Postgres (Vercel + Supabase), files go to Storage so they survive deploys.
+    Locally (SQLite), files go under UPLOADS_DIR.
+    slot must be 'photo' or 'extra'.
+    """
+    if not upload or getattr(upload, "filename", "") == "":
+        return ""
+    if slot not in ("photo", "extra"):
+        raise ValueError("Invalid photo slot")
+    stem = _safe_filename_stem(sr_code)
+    if USE_POSTGRES:
+        object_path = f"users/{stem}/photo.png" if slot == "photo" else f"users/{stem}/extra.png"
+        return _image_upload_to_storage(upload, object_path)
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    try:
+        im = Image.open(upload.stream)
+        im = im.convert("RGB")
+    except OSError:
+        raise ValueError("Invalid image file")
+    max_side = 1400
+    if max(im.size) > max_side:
+        im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    prefix = f"{sr_code}_photo" if slot == "photo" else f"{sr_code}_extra"
+    out_name = f"{_safe_filename_stem(prefix)}.png"
+    out_path = os.path.join(UPLOADS_DIR, out_name)
+    im.save(out_path, format="PNG", optimize=True)
+    return out_name
+
+
 @app.errorhandler(ConfigError)
 def _handle_config_error(e):
     return jsonify({"error": str(e)}), 500
@@ -324,8 +355,9 @@ def get_db():
     if db is None:
         if os.environ.get("VERCEL") == "1" and not USE_POSTGRES:
             raise ConfigError(
-                "No Postgres URL on Vercel. Set DATABASE_URL, or use Vercel’s Supabase integration "
-                "so POSTGRES_PRISMA_URL / POSTGRES_URL is present. Local .env.local is not deployed."
+                "No Postgres URL on Vercel. SQLite and local files are wiped on each deploy; "
+                "set DATABASE_URL (or POSTGRES_PRISMA_URL / POSTGRES_URL from Vercel’s Supabase "
+                "integration). Local .env.local is not deployed."
             )
         if USE_POSTGRES:
             if psycopg2 is None or RealDictCursor is None:
@@ -1439,47 +1471,14 @@ def api_account_user_update_photos(user_id):
     updates = []
     vals = []
     try:
-        if USE_POSTGRES:
-            if photo and getattr(photo, "filename", ""):
-                fn = _image_upload_to_storage(
-                    photo,
-                    f"users/{_safe_filename_stem(row['sr_code'])}/photo.png",
-                )
+        if photo and getattr(photo, "filename", ""):
+            fn = _save_user_profile_photo(photo, row["sr_code"], slot="photo")
+            if fn:
                 updates.append("photo_filename = ?")
                 vals.append(fn)
-            # extra photo is optional; keep supported if client still sends it.
-            if extra and getattr(extra, "filename", ""):
-                fn2 = _image_upload_to_storage(
-                    extra,
-                    f"users/{_safe_filename_stem(row['sr_code'])}/extra.png",
-                )
-                updates.append("extra_photo_filename = ?")
-                vals.append(fn2)
-        else:
-            os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-            def save_image(upload, filename_prefix):
-                if not upload or getattr(upload, "filename", "") == "":
-                    return ""
-                try:
-                    im = Image.open(upload.stream)
-                    im = im.convert("RGB")
-                except OSError:
-                    raise ValueError("Invalid image file")
-                max_side = 1400
-                if max(im.size) > max_side:
-                    im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-                out_name = f"{_safe_filename_stem(filename_prefix)}.png"
-                out_path = os.path.join(UPLOADS_DIR, out_name)
-                im.save(out_path, format="PNG", optimize=True)
-                return out_name
-
-            if photo and getattr(photo, "filename", ""):
-                fn = save_image(photo, f"{row['sr_code']}_photo")
-                updates.append("photo_filename = ?")
-                vals.append(fn)
-            if extra and getattr(extra, "filename", ""):
-                fn2 = save_image(extra, f"{row['sr_code']}_extra")
+        if extra and getattr(extra, "filename", ""):
+            fn2 = _save_user_profile_photo(extra, row["sr_code"], slot="extra")
+            if fn2:
                 updates.append("extra_photo_filename = ?")
                 vals.append(fn2)
     except ValueError as e:
@@ -1521,46 +1520,14 @@ def api_admin_user_update_photos(user_id):
     updates = []
     vals = []
     try:
-        if USE_POSTGRES:
-            if photo and getattr(photo, "filename", ""):
-                fn = _image_upload_to_storage(
-                    photo,
-                    f"users/{_safe_filename_stem(row['sr_code'])}/photo.png",
-                )
+        if photo and getattr(photo, "filename", ""):
+            fn = _save_user_profile_photo(photo, row["sr_code"], slot="photo")
+            if fn:
                 updates.append("photo_filename = ?")
                 vals.append(fn)
-            if extra and getattr(extra, "filename", ""):
-                fn2 = _image_upload_to_storage(
-                    extra,
-                    f"users/{_safe_filename_stem(row['sr_code'])}/extra.png",
-                )
-                updates.append("extra_photo_filename = ?")
-                vals.append(fn2)
-        else:
-            os.makedirs(UPLOADS_DIR, exist_ok=True)
-
-            def save_image(upload, filename_prefix):
-                if not upload or getattr(upload, "filename", "") == "":
-                    return ""
-                try:
-                    im = Image.open(upload.stream)
-                    im = im.convert("RGB")
-                except OSError:
-                    raise ValueError("Invalid image file")
-                max_side = 1400
-                if max(im.size) > max_side:
-                    im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-                out_name = f"{_safe_filename_stem(filename_prefix)}.png"
-                out_path = os.path.join(UPLOADS_DIR, out_name)
-                im.save(out_path, format="PNG", optimize=True)
-                return out_name
-
-            if photo and getattr(photo, "filename", ""):
-                fn = save_image(photo, f"{row['sr_code']}_photo")
-                updates.append("photo_filename = ?")
-                vals.append(fn)
-            if extra and getattr(extra, "filename", ""):
-                fn2 = save_image(extra, f"{row['sr_code']}_extra")
+        if extra and getattr(extra, "filename", ""):
+            fn2 = _save_user_profile_photo(extra, row["sr_code"], slot="extra")
+            if fn2:
                 updates.append("extra_photo_filename = ?")
                 vals.append(fn2)
     except ValueError as e:

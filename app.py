@@ -2,6 +2,7 @@ import io
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -76,6 +77,30 @@ PH_TZ = ZoneInfo("Asia/Manila")
 
 def now_ph():
     return datetime.now(PH_TZ).replace(tzinfo=None)
+
+
+_CACHE = {}
+
+
+def cache_get(key: str):
+    ent = _CACHE.get(key)
+    if not ent:
+        return None
+    exp, val = ent
+    if exp < time.time():
+        _CACHE.pop(key, None)
+        return None
+    return val
+
+
+def cache_set(key: str, value, ttl_s: int):
+    _CACHE[key] = (time.time() + ttl_s, value)
+
+
+def cache_clear_prefix(prefix: str):
+    for k in list(_CACHE.keys()):
+        if k.startswith(prefix):
+            _CACHE.pop(k, None)
 # ID templates live in repo-level `resources/`
 ID_FRONT_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "front_id.png")
 ID_BACK_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "back_id.png")
@@ -750,6 +775,7 @@ def api_scan():
         )
         action = "time_in"
     db.commit()
+    cache_clear_prefix("account_batch_users:")
 
     spent_sec = sum_logged_seconds_for_user(cur, user_id, now)
     required_sec = float(row["required_hours"]) * 3600.0
@@ -936,6 +962,8 @@ def api_register():
         db.commit()
     except DB_INTEGRITY_ERRORS:
         return jsonify({"error": "SR-Code is already registered"}), 400
+    cache_clear_prefix("batches:")
+    cache_clear_prefix("account_batch_users:")
 
     if USE_POSTGRES:
         cur.execute("SELECT id FROM ojt_users WHERE sr_code = ?", (sr_code,))
@@ -997,6 +1025,10 @@ def api_suggest_course():
 @app.get("/api/batches")
 def api_batches():
     q = (request.args.get("q") or "").strip().lower()
+    cache_key = f"batches:q={q}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
     db = get_db()
     cur = db.cursor()
     if q:
@@ -1007,22 +1039,93 @@ def api_batches():
     else:
         cur.execute("SELECT id, name FROM batches ORDER BY name")
     rows = [{"id": r["id"], "name": r["name"]} for r in cur.fetchall()]
-    return jsonify({"batches": rows})
+    payload = {"batches": rows}
+    cache_set(cache_key, payload, ttl_s=30)
+    return jsonify(payload)
 
 
 @app.get("/api/account/batch/<int:batch_id>/users")
 def api_account_batch_users(batch_id):
+    cache_key = f"account_batch_users:{batch_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
     db = get_db()
     cur = db.cursor()
     cur.execute("SELECT id, name FROM batches WHERE id = ?", (batch_id,))
     if not cur.fetchone():
         return jsonify({"error": "Batch not found"}), 404
-    cur.execute(
-        "SELECT id, name, course FROM ojt_users WHERE batch_id = ? ORDER BY name",
-        (batch_id,),
-    )
-    users = [{"id": r["id"], "name": r["name"], "course": r["course"]} for r in cur.fetchall()]
-    return jsonify({"users": users})
+    now = now_ph()
+    if USE_POSTGRES:
+        now_s = now.isoformat(timespec="seconds")
+        cur.execute(
+            """
+            SELECT
+              u.id,
+              u.name,
+              u.course,
+              u.required_hours,
+              COALESCE(
+                SUM(
+                  GREATEST(
+                    0,
+                    EXTRACT(EPOCH FROM (
+                      (COALESCE(NULLIF(te.time_out, ''), %s)::timestamp) - (te.time_in::timestamp)
+                    ))
+                    - CASE
+                        WHEN te.time_out IS NOT NULL
+                         AND te.time_out <> ''
+                         AND (te.time_in::date = te.time_out::date)
+                         AND EXTRACT(EPOCH FROM (te.time_out::timestamp - te.time_in::timestamp)) > 0
+                        THEN 3600
+                        ELSE 0
+                      END
+                  )
+                ),
+                0
+              ) AS spent_seconds
+            FROM ojt_users u
+            LEFT JOIN time_entries te ON te.user_id = u.id
+            WHERE u.batch_id = %s
+            GROUP BY u.id, u.name, u.course, u.required_hours
+            ORDER BY u.name
+            """,
+            (now_s, batch_id),
+        )
+        rows = cur.fetchall()
+    else:
+        cur.execute(
+            "SELECT id, name, course, required_hours FROM ojt_users WHERE batch_id = ? ORDER BY name",
+            (batch_id,),
+        )
+        rows = []
+        for r in cur.fetchall():
+            spent_sec = sum_logged_seconds_for_user(cur, r["id"], now)
+            rows.append({**dict(r), "spent_seconds": spent_sec})
+
+    users = []
+    for r in rows:
+        spent_sec = float(r.get("spent_seconds") or 0)
+        spent_hours = int(spent_sec // 3600)
+        try:
+            required_hours = int(round(float(r.get("required_hours") or 0)))
+        except (TypeError, ValueError):
+            required_hours = 0
+        users.append(
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "course": r["course"],
+                "spent_hours": spent_hours,
+                "required_hours": required_hours,
+                "progress_label": f"{spent_hours}/{required_hours} hours"
+                if required_hours
+                else f"{spent_hours}h",
+            }
+        )
+    payload = {"users": users}
+    cache_set(cache_key, payload, ttl_s=8)
+    return jsonify(payload)
 
 
 @app.post("/api/account/user/<int:user_id>/login")
@@ -1740,6 +1843,7 @@ def api_admin_create_batch():
         bid = row["id"] if row else None
     else:
         bid = cur.lastrowid
+    cache_clear_prefix("batches:")
     return jsonify({"ok": True, "id": bid})
 
 

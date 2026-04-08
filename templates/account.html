@@ -165,6 +165,7 @@
     stepUsers.classList.remove('hidden');
     stepDetail.classList.add('hidden');
     document.getElementById('users-batch-title').textContent = selectedBatchName;
+    userList.innerHTML = '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
     const r = await fetch('/api/account/batch/' + selectedBatchId + '/users');
     const d = await r.json();
     userList.innerHTML = '';
@@ -174,8 +175,15 @@
     }
     d.users.forEach(function (u) {
       const el = document.createElement('div');
-      el.className = 'list-item';
-      el.innerHTML = '<strong>' + escapeHtml(u.name) + '</strong><br><span class="muted">' + escapeHtml(u.course) + '</span>';
+      el.className = 'list-item list-item--row';
+      el.innerHTML =
+        '<div class="list-item__main">' +
+          '<strong>' + escapeHtml(u.name) + '</strong><br>' +
+          '<span class="muted">' + escapeHtml(u.course) + '</span>' +
+        '</div>' +
+        '<div class="list-item__right">' +
+          '<span class="progress-pill" title="Spent/Required hours">' + escapeHtml(u.progress_label || '') + '</span>' +
+        '</div>';
       el.addEventListener('click', function () {
         selectedUserId = u.id;
         pwdForName.textContent = u.name;

@@ -159,13 +159,27 @@
     if (!val) return '';
     return val.length === 16 ? val + ':00' : val;
   }
-
-  function addHoursToLocalInput(val, hours) {
+ 
+  // Compute a recommended time-out for manual admin entries.
+  // Rule:
+  // - Default: time_out = time_in + 9 hours
+  // - If time_in is in the morning (hour < 12), keep time_out on the same day
+  //   even if +9h would roll to the next day.
+  function autoTimeOutForAdmin(val) {
     if (!val) return '';
-    // `val` is datetime-local ("YYYY-MM-DDTHH:mm").
     const d = new Date(val);
     if (Number.isNaN(d.getTime())) return '';
-    d.setHours(d.getHours() + hours);
+    const start = new Date(d.getTime());
+    d.setHours(d.getHours() + 9);
+    if (
+      start.getHours() < 12 &&
+      (d.getFullYear() !== start.getFullYear() ||
+        d.getMonth() !== start.getMonth() ||
+        d.getDate() !== start.getDate())
+    ) {
+      d.setFullYear(start.getFullYear(), start.getMonth(), start.getDate());
+      d.setHours(23, 59, 0, 0);
+    }
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
@@ -552,7 +566,7 @@
   newEntryInEl.addEventListener('input', function () {
     if (!newEntryInEl.value) return;
     if (!newEntryOutEl.value) {
-      newEntryOutEl.value = addHoursToLocalInput(newEntryInEl.value, 11);
+      newEntryOutEl.value = autoTimeOutForAdmin(newEntryInEl.value);
     }
   });
 })();

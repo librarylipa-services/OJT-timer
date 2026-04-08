@@ -13,6 +13,7 @@ from flask import Flask, g, jsonify, render_template, request, send_file, sessio
 from flask.json.provider import DefaultJSONProvider
 from werkzeug.exceptions import HTTPException
 from PIL import Image, ImageDraw, ImageFont
+import PIL
 from qrcode.constants import ERROR_CORRECT_M
 from werkzeug.security import check_password_hash, generate_password_hash
 import qrcode
@@ -1054,8 +1055,20 @@ def _pick_id_font(size):
                 return ImageFont.truetype(fp, size=size)
         except OSError:
             pass
+    # Pillow wheels usually ship DejaVu fonts (works on Linux/Vercel).
     try:
-        return ImageFont.truetype("arial.ttf", size=size)
+        pil_dir = os.path.dirname(PIL.__file__)
+        for fp in (
+            os.path.join(pil_dir, "fonts", "DejaVuSans-Bold.ttf"),
+            os.path.join(pil_dir, "fonts", "DejaVuSans.ttf"),
+        ):
+            if os.path.isfile(fp):
+                return ImageFont.truetype(fp, size=size)
+    except Exception:
+        pass
+    try:
+        # Common on Linux images
+        return ImageFont.truetype("DejaVuSans.ttf", size=size)
     except OSError:
         return ImageFont.load_default()
 

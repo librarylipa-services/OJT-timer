@@ -160,6 +160,20 @@
     return val.length === 16 ? val + ':00' : val;
   }
 
+  function addHoursToLocalInput(val, hours) {
+    if (!val) return '';
+    // `val` is datetime-local ("YYYY-MM-DDTHH:mm").
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return '';
+    d.setHours(d.getHours() + hours);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return yyyy + '-' + mm + '-' + dd + 'T' + hh + ':' + mi;
+  }
+
   document.getElementById('btn-admin-login').addEventListener('click', async function () {
     const err = document.getElementById('admin-login-error');
     err.classList.add('hidden');
@@ -530,6 +544,16 @@
     document.getElementById('new-entry-in').value = '';
     document.getElementById('new-entry-out').value = '';
     openUser(currentUserId);
+  });
+
+  // Auto-fill time-out to same day + 11 hours (net ~10 hours after lunch deduction).
+  const newEntryInEl = document.getElementById('new-entry-in');
+  const newEntryOutEl = document.getElementById('new-entry-out');
+  newEntryInEl.addEventListener('input', function () {
+    if (!newEntryInEl.value) return;
+    if (!newEntryOutEl.value) {
+      newEntryOutEl.value = addHoursToLocalInput(newEntryInEl.value, 11);
+    }
   });
 })();
 </script>

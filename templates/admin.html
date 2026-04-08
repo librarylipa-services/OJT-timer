@@ -312,7 +312,10 @@
     if (!r.ok) return;
     const d = await r.json();
     const u = d.user;
-    document.getElementById('admin-user-panel').classList.remove('hidden');
+    const panel = document.getElementById('admin-user-panel');
+    panel.classList.remove('hidden');
+    // Bring the edit panel into view immediately after selecting a trainee.
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     document.getElementById('edit-user-title').textContent = u.name;
     document.getElementById('edit-user-stats').innerHTML =
       'Spent: <strong>' + escapeHtml(d.spent_label) + '</strong> (' + d.spent_hours + 'h ' + d.spent_minutes + 'm) · ' +

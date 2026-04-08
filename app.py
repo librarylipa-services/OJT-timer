@@ -227,11 +227,23 @@ def _image_upload_to_storage(upload, object_path: str) -> str:
     max_side = 1400
     if max(im.size) > max_side:
         im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    # Prefer WebP for smaller uploads; fall back to PNG if unavailable.
     buf = io.BytesIO()
-    im.save(buf, format="PNG", optimize=True)
+    content_type = "image/webp"
+    final_path = object_path
+    try:
+        if not final_path.lower().endswith(".webp"):
+            final_path = re.sub(r"\.[A-Za-z0-9]+$", "", final_path) + ".webp"
+        im.save(buf, format="WEBP", quality=82, method=6)
+    except Exception:
+        buf = io.BytesIO()
+        content_type = "image/png"
+        if not final_path.lower().endswith(".png"):
+            final_path = re.sub(r"\.[A-Za-z0-9]+$", "", final_path) + ".png"
+        im.save(buf, format="PNG", optimize=True)
     body = buf.getvalue()
-    _storage_put_object(SUPABASE_STORAGE_BUCKET, object_path, "image/png", body)
-    return object_path
+    _storage_put_object(SUPABASE_STORAGE_BUCKET, final_path, content_type, body)
+    return final_path
 
 
 def _save_user_profile_photo(upload, sr_code: str, *, slot: str) -> str:
@@ -247,7 +259,9 @@ def _save_user_profile_photo(upload, sr_code: str, *, slot: str) -> str:
         raise ValueError("Invalid photo slot")
     stem = _safe_filename_stem(sr_code)
     if USE_POSTGRES:
-        object_path = f"users/{stem}/photo.png" if slot == "photo" else f"users/{stem}/extra.png"
+        object_path = (
+            f"users/{stem}/photo.webp" if slot == "photo" else f"users/{stem}/extra.webp"
+        )
         return _image_upload_to_storage(upload, object_path)
     os.makedirs(UPLOADS_DIR, exist_ok=True)
     try:
@@ -259,9 +273,14 @@ def _save_user_profile_photo(upload, sr_code: str, *, slot: str) -> str:
     if max(im.size) > max_side:
         im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     prefix = f"{sr_code}_photo" if slot == "photo" else f"{sr_code}_extra"
-    out_name = f"{_safe_filename_stem(prefix)}.png"
+    out_name = f"{_safe_filename_stem(prefix)}.webp"
     out_path = os.path.join(UPLOADS_DIR, out_name)
-    im.save(out_path, format="PNG", optimize=True)
+    try:
+        im.save(out_path, format="WEBP", quality=82, method=6)
+    except Exception:
+        out_name = f"{_safe_filename_stem(prefix)}.png"
+        out_path = os.path.join(UPLOADS_DIR, out_name)
+        im.save(out_path, format="PNG", optimize=True)
     return out_name
 
 
@@ -887,10 +906,7 @@ def api_register():
     extra_photo_filename = ""
     try:
         if USE_POSTGRES:
-            photo_filename = _image_upload_to_storage(
-                files.get("photo"),
-                f"users/{_safe_filename_stem(sr_code)}/photo.png",
-            )
+            photo_filename = _save_user_profile_photo(files.get("photo"), sr_code, slot="photo")
             # extra photo removed from UI; ignore if provided.
         else:
             os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -908,9 +924,14 @@ def api_register():
                 max_side = 1400
                 if max(im.size) > max_side:
                     im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-                out_name = f"{_safe_filename_stem(filename_prefix)}.png"
+                out_name = f"{_safe_filename_stem(filename_prefix)}.webp"
                 out_path = os.path.join(UPLOADS_DIR, out_name)
-                im.save(out_path, format="PNG", optimize=True)
+                try:
+                    im.save(out_path, format="WEBP", quality=82, method=6)
+                except Exception:
+                    out_name = f"{_safe_filename_stem(filename_prefix)}.png"
+                    out_path = os.path.join(UPLOADS_DIR, out_name)
+                    im.save(out_path, format="PNG", optimize=True)
                 return out_name
 
             photo_filename = save_image(files.get("photo"), f"{sr_code}_photo")
@@ -922,40 +943,17 @@ def api_register():
 
     pw_hash = generate_password_hash(password)
     created = now_ph().isoformat(timespec="seconds")
-    cols = _ojt_user_columns(cur)
     try:
-        if "qr_token" in cols:
-            cur.execute(
-                """
-                INSERT INTO ojt_users (
-                    sr_code, qr_token, name, gender, department, course, batch_id,
-                    required_hours, password_hash, photo_filename, extra_photo_filename,
-                    goal_text, accomplishment_text, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?)
-                """,
-                (
-                    sr_code,
-                    sr_code,
-                    name,
-                    gender,
-                    department,
-                    course,
-                    batch_id,
-                    required_hours,
-                    pw_hash,
-                    photo_filename,
-                    extra_photo_filename,
-                    created,
-                ),
-            )
-        else:
+        if USE_POSTGRES:
             cur.execute(
                 """
                 INSERT INTO ojt_users (
                     sr_code, name, gender, department, course, batch_id,
                     required_hours, password_hash, photo_filename, extra_photo_filename,
                     goal_text, accomplishment_text, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?)
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?)
+                RETURNING id
                 """,
                 (
                     sr_code,
@@ -971,18 +969,64 @@ def api_register():
                     created,
                 ),
             )
+            uid = (cur.fetchone() or {}).get("id")
+        else:
+            cols = _ojt_user_columns(cur)
+            if "qr_token" in cols:
+                cur.execute(
+                    """
+                    INSERT INTO ojt_users (
+                        sr_code, qr_token, name, gender, department, course, batch_id,
+                        required_hours, password_hash, photo_filename, extra_photo_filename,
+                        goal_text, accomplishment_text, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?)
+                    """,
+                    (
+                        sr_code,
+                        sr_code,
+                        name,
+                        gender,
+                        department,
+                        course,
+                        batch_id,
+                        required_hours,
+                        pw_hash,
+                        photo_filename,
+                        extra_photo_filename,
+                        created,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO ojt_users (
+                        sr_code, name, gender, department, course, batch_id,
+                        required_hours, password_hash, photo_filename, extra_photo_filename,
+                        goal_text, accomplishment_text, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?)
+                    """,
+                    (
+                        sr_code,
+                        name,
+                        gender,
+                        department,
+                        course,
+                        batch_id,
+                        required_hours,
+                        pw_hash,
+                        photo_filename,
+                        extra_photo_filename,
+                        created,
+                    ),
+                )
+            uid = cur.lastrowid
         db.commit()
     except DB_INTEGRITY_ERRORS:
         return jsonify({"error": "SR-Code is already registered"}), 400
+
     cache_clear_prefix("batches:")
     cache_clear_prefix("account_batch_users:")
-
-    if USE_POSTGRES:
-        cur.execute("SELECT id FROM ojt_users WHERE sr_code = ?", (sr_code,))
-        row = cur.fetchone()
-        uid = row["id"] if row else None
-    else:
-        uid = cur.lastrowid
+    cache_clear_prefix("admin:")
     qr_url = f"/api/qr?code={quote(sr_code, safe='')}"
     return jsonify(
         {
@@ -1671,6 +1715,8 @@ def api_admin_user_update_photos(user_id):
     vals.append(user_id)
     cur.execute(f"UPDATE ojt_users SET {', '.join(updates)} WHERE id = ?", vals)
     db.commit()
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
     return jsonify({"ok": True})
 
 
@@ -1687,6 +1733,8 @@ def api_admin_user_delete(user_id):
     cur.execute("DELETE FROM time_entries WHERE user_id = ?", (user_id,))
     cur.execute("DELETE FROM ojt_users WHERE id = ?", (user_id,))
     db.commit()
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
     return jsonify({"ok": True})
 
 
@@ -1857,20 +1905,24 @@ def api_admin_create_batch():
     cur = db.cursor()
     created = now_ph().isoformat(timespec="seconds")
     try:
-        cur.execute(
-            "INSERT INTO batches (name, created_at) VALUES (?, ?)",
-            (name, created),
-        )
+        if USE_POSTGRES:
+            cur.execute(
+                "INSERT INTO batches (name, created_at) VALUES (?, ?) RETURNING id",
+                (name, created),
+            )
+            row = cur.fetchone() or {}
+            bid = row.get("id")
+        else:
+            cur.execute(
+                "INSERT INTO batches (name, created_at) VALUES (?, ?)",
+                (name, created),
+            )
+            bid = cur.lastrowid
         db.commit()
     except DB_INTEGRITY_ERRORS:
         return jsonify({"error": "Batch name already exists"}), 400
-    if USE_POSTGRES:
-        cur.execute("SELECT id FROM batches WHERE name = ?", (name,))
-        row = cur.fetchone()
-        bid = row["id"] if row else None
-    else:
-        bid = cur.lastrowid
     cache_clear_prefix("batches:")
+    cache_clear_prefix("admin:")
     return jsonify({"ok": True, "id": bid})
 
 
@@ -1879,6 +1931,9 @@ def api_admin_batches_list():
     err = require_admin()
     if err:
         return err
+    cached = cache_get("admin:batches")
+    if cached is not None:
+        return jsonify(cached)
     db = get_db()
     cur = db.cursor()
     cur.execute(
@@ -1893,7 +1948,9 @@ def api_admin_batches_list():
         {"id": r["id"], "name": r["name"], "trainee_count": r["trainee_count"]}
         for r in cur.fetchall()
     ]
-    return jsonify({"batches": batches})
+    payload = {"batches": batches}
+    cache_set("admin:batches", payload, ttl_s=10)
+    return jsonify(payload)
 
 
 @app.get("/api/admin/users")
@@ -1910,6 +1967,9 @@ def api_admin_users():
         except (TypeError, ValueError):
             return jsonify({"error": "Invalid batch_id"}), 400
 
+    cached = cache_get(f"admin:users:q={q}:batch={batch_id}")
+    if cached is not None:
+        return jsonify(cached)
     db = get_db()
     cur = db.cursor()
     conditions = []
@@ -1938,7 +1998,9 @@ def api_admin_users():
         params,
     )
     users = [dict(r) for r in cur.fetchall()]
-    return jsonify({"users": users})
+    payload = {"users": users}
+    cache_set(f"admin:users:q={q}:batch={batch_id}", payload, ttl_s=10)
+    return jsonify(payload)
 
 
 @app.get("/api/admin/user/<int:user_id>")
@@ -2067,8 +2129,10 @@ def api_admin_user_update(user_id):
             values,
         )
         db.commit()
-    except sqlite3.IntegrityError:
+    except DB_INTEGRITY_ERRORS:
         return jsonify({"error": "SR-Code already in use"}), 400
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
     return jsonify({"ok": True})
 
 
@@ -2150,6 +2214,8 @@ def api_admin_entry_update(entry_id):
             (time_in, tout, entry_id),
         )
     db.commit()
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
     return jsonify({"ok": True})
 
 
@@ -2177,26 +2243,22 @@ def api_admin_entry_create(user_id):
         return jsonify({"error": "User not found"}), 404
 
     tout = time_out if time_out else None
-    cur.execute(
-        "INSERT INTO time_entries (user_id, time_in, time_out) VALUES (?, ?, ?)",
-        (user_id, time_in, tout),
-    )
-    db.commit()
     if USE_POSTGRES:
         cur.execute(
-            """
-            SELECT id
-            FROM time_entries
-            WHERE user_id = ? AND time_in = ? AND (time_out IS NOT DISTINCT FROM ?)
-            ORDER BY id DESC
-            LIMIT 1
-            """,
+            "INSERT INTO time_entries (user_id, time_in, time_out) VALUES (?, ?, ?) RETURNING id",
             (user_id, time_in, tout),
         )
-        row = cur.fetchone()
-        new_id = row["id"] if row else None
+        row = cur.fetchone() or {}
+        new_id = row.get("id")
     else:
+        cur.execute(
+            "INSERT INTO time_entries (user_id, time_in, time_out) VALUES (?, ?, ?)",
+            (user_id, time_in, tout),
+        )
         new_id = cur.lastrowid
+    db.commit()
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
     return jsonify({"ok": True, "id": new_id})
 
 
@@ -2211,6 +2273,8 @@ def api_admin_entry_delete(entry_id):
     db.commit()
     if cur.rowcount == 0:
         return jsonify({"error": "Not found"}), 404
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
     return jsonify({"ok": True})
 
 

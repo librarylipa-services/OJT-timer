@@ -4,12 +4,14 @@ import re
 import sqlite3
 from datetime import datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
 from flask import Flask, g, jsonify, render_template, request, send_file, session
 from flask.json.provider import DefaultJSONProvider
+from werkzeug.exceptions import HTTPException
 from PIL import Image, ImageDraw, ImageFont
 from qrcode.constants import ERROR_CORRECT_M
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -66,6 +68,13 @@ SUPABASE_SERVICE_ROLE_KEY = _env_first(
     "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE"
 )
 SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "ojt-photos").strip()
+
+# Use Philippine local time everywhere (store timestamps as naive "local" ISO strings).
+PH_TZ = ZoneInfo("Asia/Manila")
+
+
+def now_ph():
+    return datetime.now(PH_TZ).replace(tzinfo=None)
 # ID templates live in repo-level `resources/`
 ID_FRONT_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "front_id.png")
 ID_BACK_TEMPLATE_PATH = os.path.join(BASE_DIR, "resources", "back_id.png")
@@ -243,6 +252,16 @@ if psycopg2:
         if request.path.startswith("/api/"):
             return jsonify({"error": "Database connection failed", "detail": str(e)}), 503
         raise e
+
+
+@app.errorhandler(Exception)
+def _handle_unexpected_exception(e):
+    # Ensure API callers don't receive HTML error pages.
+    if isinstance(e, HTTPException):
+        return e
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Internal server error", "detail": str(e)}), 500
+    raise e
 
 
 @app.get("/api/health/db")
@@ -579,7 +598,7 @@ def round_time_out(dt):
 
 
 def entry_duration_seconds(time_in, time_out, now=None):
-    now = now or datetime.now()
+    now = now or now_ph()
     tin = parse_dt(time_in)
     if not tin:
         return 0
@@ -596,7 +615,7 @@ def entry_duration_seconds(time_in, time_out, now=None):
 
 
 def sum_logged_seconds_for_user(cur, user_id, now=None):
-    now = now or datetime.now()
+    now = now or now_ph()
     cur.execute(
         "SELECT time_in, time_out FROM time_entries WHERE user_id = ? ORDER BY time_in",
         (user_id,),
@@ -654,13 +673,14 @@ def page_admin():
 
 @app.route("/api/server-time")
 def api_server_time():
-    now = datetime.now()
+    now = now_ph()
     return jsonify(
         {
             "iso": now.isoformat(timespec="seconds"),
             "date_display": now.strftime("%Y-%m-%d"),
             "time_display": now.strftime("%H:%M:%S"),
             "weekday": now.strftime("%A"),
+            "tz": "Asia/Manila",
         }
     )
 
@@ -703,7 +723,7 @@ def api_scan():
         return jsonify({"error": msg}), 404
 
     user_id = row["id"]
-    now = datetime.now()
+    now = now_ph()
     now_s = now.isoformat(timespec="seconds")
 
     open_entry = get_open_entry(cur, user_id)
@@ -862,7 +882,7 @@ def api_register():
         return jsonify({"error": str(e)}), 500
 
     pw_hash = generate_password_hash(password)
-    created = datetime.now().isoformat(timespec="seconds")
+    created = now_ph().isoformat(timespec="seconds")
     cols = _ojt_user_columns(cur)
     try:
         if "qr_token" in cols:
@@ -1075,11 +1095,14 @@ def _pick_id_font(size):
 def _draw_front_id_text(template, full_name, course):
     im_w, im_h = template.size
     left, top, right, bottom = _front_photo_box(im_w, im_h)
-    y0 = min(im_h - 1, bottom + max(14, int(round(im_h * 0.014))))
-    pad_x = max(18, int(round(im_w * 0.06)))
+    # Place text into the large band below the photo (the red rectangle area in the template).
+    # Start a bit below the photo, but clamp to a stable ratio so it doesn't crowd the frame.
+    y0 = max(bottom + max(10, int(round(im_h * 0.01))), int(round(im_h * 0.63)))
+    # Reduce side padding so we can render larger fonts.
+    pad_x = max(10, int(round(im_w * 0.03)))
     x0 = pad_x
     x1 = im_w - pad_x
-    line_gap = max(6, int(round(im_h * 0.008)))
+    line_gap = max(10, int(round(im_h * 0.012)))
 
     name = (full_name or "").strip()
     if not name and not course:
@@ -1099,28 +1122,58 @@ def _draw_front_id_text(template, full_name, course):
         return _pick_id_font(min_size)
 
     draw = ImageDraw.Draw(template)
-    if name:
-        up = name.upper()
-        f1 = fit_font(up, max_size=max(18, int(round(im_h * 0.04))), min_size=14)
-        b1 = draw.textbbox((0, 0), up, font=f1)
-        nx = x0 + ((x1 - x0) - (b1[2] - b1[0])) // 2
-        draw.text((nx, y0), up, fill=(120, 0, 0), font=f1)
-        y0 += (b1[3] - b1[1]) + line_gap
+    def wrap_words_to_lines(text, max_lines):
+        words = [w for w in (text or "").split() if w]
+        if not words:
+            return []
+        lines = []
+        i = 0
+        while i < len(words) and len(lines) < max_lines:
+            line = words[i]
+            i += 1
+            while i < len(words):
+                candidate = f"{line} {words[i]}"
+                # Use a medium probe size to decide wrapping, independent of final font size.
+                probe = _pick_id_font(max(24, int(round(im_h * 0.05))))
+                bbox = draw.textbbox((0, 0), candidate, font=probe)
+                if (bbox[2] - bbox[0]) <= (x1 - x0):
+                    line = candidate
+                    i += 1
+                else:
+                    break
+            lines.append(line)
+        # If we ran out of lines but still have words, append them to the last line.
+        if i < len(words) and lines:
+            lines[-1] = (lines[-1] + " " + " ".join(words[i:])).strip()
+        return lines
 
+    # Make the first word very large, then render the rest of the name (wrapped) large too.
     if first:
         up1 = first.upper()
-        f2 = fit_font(up1, max_size=max(22, int(round(im_h * 0.055))), min_size=16)
+        f2 = fit_font(up1, max_size=max(140, int(round(im_h * 0.33))), min_size=48)
         b2 = draw.textbbox((0, 0), up1, font=f2)
         fx = x0 + ((x1 - x0) - (b2[2] - b2[0])) // 2
         draw.text((fx, y0), up1, fill=(120, 0, 0), font=f2)
         y0 += (b2[3] - b2[1]) + line_gap
 
+    if name:
+        rest = " ".join(name.split()[1:]).strip()
+        if rest:
+            for line in wrap_words_to_lines(rest.upper(), max_lines=2):
+                f1 = fit_font(line, max_size=max(92, int(round(im_h * 0.22))), min_size=34)
+                b1 = draw.textbbox((0, 0), line, font=f1)
+                nx = x0 + ((x1 - x0) - (b1[2] - b1[0])) // 2
+                draw.text((nx, y0), line, fill=(120, 0, 0), font=f1)
+                y0 += (b1[3] - b1[1]) + line_gap
+
     c = (course or "").strip()
     if c:
-        f3 = fit_font(c, max_size=max(14, int(round(im_h * 0.028))), min_size=12)
-        b3 = draw.textbbox((0, 0), c, font=f3)
-        cx = x0 + ((x1 - x0) - (b3[2] - b3[0])) // 2
-        draw.text((cx, y0), c, fill=(120, 0, 0), font=f3)
+        for line in wrap_words_to_lines(c, max_lines=2):
+            f3 = fit_font(line, max_size=max(88, int(round(im_h * 0.19))), min_size=30)
+            b3 = draw.textbbox((0, 0), line, font=f3)
+            cx = x0 + ((x1 - x0) - (b3[2] - b3[0])) // 2
+            draw.text((cx, y0), line, fill=(120, 0, 0), font=f3)
+            y0 += (b3[3] - b3[1]) + line_gap
 
 
 def _load_user_photo(photo_filename):
@@ -1513,7 +1566,7 @@ def api_account_user_detail(user_id):
     if not row:
         return jsonify({"error": "Not found"}), 404
 
-    now = datetime.now()
+    now = now_ph()
     spent_sec = sum_logged_seconds_for_user(cur, user_id, now)
     required_sec = float(row["required_hours"]) * 3600.0
     left_sec = max(0.0, required_sec - spent_sec)
@@ -1659,7 +1712,7 @@ def api_admin_create_batch():
         return jsonify({"error": "Batch name required"}), 400
     db = get_db()
     cur = db.cursor()
-    created = datetime.now().isoformat(timespec="seconds")
+    created = now_ph().isoformat(timespec="seconds")
     try:
         cur.execute(
             "INSERT INTO batches (name, created_at) VALUES (?, ?)",
@@ -1762,7 +1815,7 @@ def api_admin_user(user_id):
     row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404
-    now = datetime.now()
+    now = now_ph()
     spent_sec = sum_logged_seconds_for_user(cur, user_id, now)
     required_sec = float(row["required_hours"]) * 3600.0
     left_sec = max(0.0, required_sec - spent_sec)
@@ -1885,7 +1938,7 @@ def api_admin_user_entries(user_id):
     cur.execute("SELECT id FROM ojt_users WHERE id = ?", (user_id,))
     if not cur.fetchone():
         return jsonify({"error": "Not found"}), 404
-    now = datetime.now()
+    now = now_ph()
     cur.execute(
         """
         SELECT id, time_in, time_out, session_note, time_in_method, time_out_method

@@ -1995,8 +1995,57 @@ def api_admin_batches_list():
         for r in cur.fetchall()
     ]
     payload = {"batches": batches}
-    cache_set("admin:batches", payload, ttl_s=10)
+    cache_set("admin:batches", payload, ttl_s=30)
     return jsonify(payload)
+
+
+@app.put("/api/admin/batches/<int:batch_id>")
+def api_admin_batch_update(batch_id):
+    err = require_admin()
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Batch name required"}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM batches WHERE id = ?", (batch_id,))
+    if not cur.fetchone():
+        return jsonify({"error": "Batch not found"}), 404
+    try:
+        cur.execute("UPDATE batches SET name = ? WHERE id = ?", (name, batch_id))
+        db.commit()
+    except DB_INTEGRITY_ERRORS:
+        return jsonify({"error": "Batch name already exists"}), 400
+    cache_clear_prefix("batches:")
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/admin/batches/<int:batch_id>")
+def api_admin_batch_delete(batch_id):
+    err = require_admin()
+    if err:
+        return err
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM batches WHERE id = ?", (batch_id,))
+    if not cur.fetchone():
+        return jsonify({"error": "Batch not found"}), 404
+    # Remove dependent rows explicitly (SQLite may not enforce FK cascades).
+    cur.execute(
+        "DELETE FROM time_entries WHERE user_id IN (SELECT id FROM ojt_users WHERE batch_id = ?)",
+        (batch_id,),
+    )
+    cur.execute("DELETE FROM ojt_users WHERE batch_id = ?", (batch_id,))
+    cur.execute("DELETE FROM batches WHERE id = ?", (batch_id,))
+    db.commit()
+    cache_clear_prefix("batches:")
+    cache_clear_prefix("admin:")
+    cache_clear_prefix("account_batch_users:")
+    return jsonify({"ok": True})
 
 
 @app.get("/api/admin/users")
@@ -2013,7 +2062,11 @@ def api_admin_users():
         except (TypeError, ValueError):
             return jsonify({"error": "Invalid batch_id"}), 400
 
-    cached = cache_get(f"admin:users:q={q}:batch={batch_id}")
+    name_order = (request.args.get("name_order") or "asc").strip().lower()
+    if name_order not in ("asc", "desc"):
+        return jsonify({"error": "name_order must be asc or desc"}), 400
+
+    cached = cache_get(f"admin:users:q={q}:batch={batch_id}:order={name_order}")
     if cached is not None:
         return jsonify(cached)
     db = get_db()
@@ -2033,19 +2086,27 @@ def api_admin_users():
         like = f"%{q}%"
         params.extend([like, like, like])
     where_sql = " AND ".join(conditions) if conditions else "1"
-    cur.execute(
-        f"""
+    order_sql = "ASC" if name_order == "asc" else "DESC"
+    base_select = """
         SELECT u.id, u.name, u.course, u.department, b.name AS batch_name, u.batch_id
         FROM ojt_users u
         JOIN batches b ON b.id = u.batch_id
-        WHERE {where_sql}
-        ORDER BY u.name
-        """,
-        params,
-    )
+        WHERE """
+    if USE_POSTGRES:
+        cur.execute(
+            base_select
+            + f"{where_sql} ORDER BY LOWER(u.name) {order_sql}",
+            params,
+        )
+    else:
+        cur.execute(
+            base_select
+            + f"{where_sql} ORDER BY u.name COLLATE NOCASE {order_sql}",
+            params,
+        )
     users = [dict(r) for r in cur.fetchall()]
     payload = {"users": users}
-    cache_set(f"admin:users:q={q}:batch={batch_id}", payload, ttl_s=10)
+    cache_set(f"admin:users:q={q}:batch={batch_id}:order={name_order}", payload, ttl_s=30)
     return jsonify(payload)
 
 

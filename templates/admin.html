@@ -40,8 +40,15 @@
 
   <div class="card">
     <h3 class="card-title">Trainees <span class="muted" id="trainees-filter-label"></span></h3>
-    <div class="form-row">
-      <input type="text" id="user-search" placeholder="Search name, course, batch…">
+    <div class="admin-trainee-toolbar">
+      <div class="form-row admin-trainee-toolbar__search">
+        <input type="text" id="user-search" placeholder="Search name, course, batch…" autocomplete="off">
+      </div>
+      <div class="admin-trainee-sort" role="group" aria-label="Sort trainees by name">
+        <span class="muted admin-trainee-sort__label" id="trainee-sort-label">Name</span>
+        <button type="button" class="secondary admin-sort-btn" id="btn-sort-az" aria-pressed="true" title="Sort A–Z">A–Z</button>
+        <button type="button" class="secondary admin-sort-btn" id="btn-sort-za" aria-pressed="false" title="Sort Z–A">Z–A</button>
+      </div>
     </div>
     <div id="admin-user-list"></div>
   </div>
@@ -162,8 +169,13 @@
   let currentUserId = null;
   let selectedAdminBatchId = null;
   let selectedAdminBatchName = '';
+  let adminBatchesCache = null;
   let entriesPage = 1;
   let lastEntryListTotalPages = 1;
+  let traineeNameOrder = sessionStorage.getItem('ojt-admin-trainee-name-order') || 'asc';
+  if (traineeNameOrder !== 'asc' && traineeNameOrder !== 'desc') {
+    traineeNameOrder = 'asc';
+  }
 
   function toLocalInput(iso) {
     if (!iso) return '';
@@ -218,8 +230,8 @@
     }
     document.getElementById('admin-login-panel').classList.add('hidden');
     document.getElementById('admin-app').classList.remove('hidden');
-    loadAdminBatches();
-    loadUserList();
+    adminBatchesCache = null;
+    await Promise.all([loadAdminBatches(true), loadUserList()]);
   });
 
   document.getElementById('btn-admin-logout').addEventListener('click', async function () {
@@ -249,7 +261,9 @@
     okEl.textContent = 'Batch created.';
     okEl.classList.remove('hidden');
     document.getElementById('new-batch-name').value = '';
-    loadAdminBatches();
+    adminBatchesCache = null;
+    await loadAdminBatches(true);
+    loadUserList();
   });
 
   function updateTraineesFilterLabel() {
@@ -261,8 +275,125 @@
     }
   }
 
-  async function loadAdminBatches() {
+  function renderAdminBatchList() {
     const box = document.getElementById('admin-batch-list');
+    const batches = adminBatchesCache || [];
+    box.innerHTML = '';
+
+    const allEl = document.createElement('div');
+    allEl.className = 'list-item' + (selectedAdminBatchId === null ? ' active' : '');
+    allEl.innerHTML = '<strong>All trainees</strong><br><span class="muted">Every batch</span>';
+    allEl.addEventListener('click', function () {
+      selectedAdminBatchId = null;
+      selectedAdminBatchName = '';
+      updateTraineesFilterLabel();
+      renderAdminBatchList();
+      loadUserList();
+    });
+    box.appendChild(allEl);
+
+    batches.forEach(function (b) {
+      const el = document.createElement('div');
+      el.className = 'list-item list-item--row' + (selectedAdminBatchId === b.id ? ' active' : '');
+      const main = document.createElement('div');
+      main.className = 'list-item__main';
+      main.innerHTML =
+        '<strong>' + escapeHtml(b.name) + '</strong><br><span class="muted">' +
+        b.trainee_count +
+        ' trainee' +
+        (b.trainee_count === 1 ? '' : 's') +
+        '</span>';
+      main.addEventListener('click', function () {
+        selectedAdminBatchId = b.id;
+        selectedAdminBatchName = b.name;
+        updateTraineesFilterLabel();
+        renderAdminBatchList();
+        loadUserList();
+      });
+      const actions = document.createElement('div');
+      actions.className = 'list-item__right admin-list-actions';
+      const btnRen = document.createElement('button');
+      btnRen.type = 'button';
+      btnRen.className = 'secondary admin-inline-btn';
+      btnRen.textContent = 'Rename';
+      btnRen.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var n = window.prompt('Batch name', b.name);
+        if (n === null) return;
+        var name = n.trim();
+        if (!name || name === b.name) return;
+        renameBatch(b.id, name);
+      });
+      const btnDel = document.createElement('button');
+      btnDel.type = 'button';
+      btnDel.className = 'danger admin-inline-btn';
+      btnDel.textContent = 'Delete';
+      btnDel.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var msg = 'Delete batch “' + b.name + '”';
+        var extra = b.trainee_count
+          ? ' and all ' + b.trainee_count + ' trainee(s) and their time entries?'
+          : ' and this empty batch?';
+        if (!window.confirm(msg + extra)) return;
+        deleteBatchById(b.id);
+      });
+      actions.appendChild(btnRen);
+      actions.appendChild(btnDel);
+      el.appendChild(main);
+      el.appendChild(actions);
+      box.appendChild(el);
+    });
+  }
+
+  async function renameBatch(batchId, name) {
+    const r = await fetch('/api/admin/batches/' + batchId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      alert(d.error || 'Rename failed');
+      return;
+    }
+    if (selectedAdminBatchId === batchId) {
+      selectedAdminBatchName = name;
+    }
+    adminBatchesCache = null;
+    await loadAdminBatches(true);
+    loadUserList();
+  }
+
+  async function deleteBatchById(batchId) {
+    const r = await fetch('/api/admin/batches/' + batchId, { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) {
+      alert(d.error || 'Delete failed');
+      return;
+    }
+    if (selectedAdminBatchId === batchId) {
+      selectedAdminBatchId = null;
+      selectedAdminBatchName = '';
+      updateTraineesFilterLabel();
+    }
+    if (currentUserId) {
+      const chk = await fetch('/api/admin/user/' + currentUserId);
+      if (!chk.ok) {
+        currentUserId = null;
+        document.getElementById('admin-user-panel').classList.add('hidden');
+      }
+    }
+    adminBatchesCache = null;
+    await loadAdminBatches(true);
+    loadUserList();
+  }
+
+  async function loadAdminBatches(forceRefresh) {
+    const box = document.getElementById('admin-batch-list');
+    if (!forceRefresh && adminBatchesCache !== null) {
+      renderAdminBatchList();
+      return;
+    }
     box.innerHTML =
       '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
     const r = await fetch('/api/admin/batches');
@@ -270,38 +401,12 @@
       document.getElementById('admin-app').classList.add('hidden');
       document.getElementById('admin-login-panel').classList.remove('hidden');
       box.innerHTML = '';
+      adminBatchesCache = null;
       return;
     }
     const d = await r.json();
-    const batches = d.batches || [];
-    box.innerHTML = '';
-
-    const allEl = document.createElement('div');
-    allEl.className = 'list-item' + (selectedAdminBatchId === null ? ' active' : '');
-    allEl.innerHTML = '<strong>All trainees</strong><br><span class="muted">Every batch</span>';
-    allEl.addEventListener('click', async function () {
-      selectedAdminBatchId = null;
-      selectedAdminBatchName = '';
-      updateTraineesFilterLabel();
-      await loadAdminBatches();
-      loadUserList();
-    });
-    box.appendChild(allEl);
-
-    batches.forEach(function (b) {
-      const el = document.createElement('div');
-      el.className = 'list-item' + (selectedAdminBatchId === b.id ? ' active' : '');
-      el.innerHTML = '<strong>' + escapeHtml(b.name) + '</strong><br><span class="muted">' +
-        b.trainee_count + ' trainee' + (b.trainee_count === 1 ? '' : 's') + '</span>';
-      el.addEventListener('click', async function () {
-        selectedAdminBatchId = b.id;
-        selectedAdminBatchName = b.name;
-        updateTraineesFilterLabel();
-        await loadAdminBatches();
-        loadUserList();
-      });
-      box.appendChild(el);
-    });
+    adminBatchesCache = d.batches || [];
+    renderAdminBatchList();
   }
 
   let searchTimer = null;
@@ -310,12 +415,40 @@
     searchTimer = setTimeout(loadUserList, 300);
   });
 
+  const btnSortAz = document.getElementById('btn-sort-az');
+  const btnSortZa = document.getElementById('btn-sort-za');
+
+  function updateTraineeSortButtons() {
+    var isAsc = traineeNameOrder === 'asc';
+    btnSortAz.setAttribute('aria-pressed', isAsc ? 'true' : 'false');
+    btnSortZa.setAttribute('aria-pressed', isAsc ? 'false' : 'true');
+    btnSortAz.classList.toggle('admin-sort-btn--active', isAsc);
+    btnSortZa.classList.toggle('admin-sort-btn--active', !isAsc);
+  }
+
+  btnSortAz.addEventListener('click', function () {
+    if (traineeNameOrder === 'asc') return;
+    traineeNameOrder = 'asc';
+    sessionStorage.setItem('ojt-admin-trainee-name-order', 'asc');
+    updateTraineeSortButtons();
+    loadUserList();
+  });
+  btnSortZa.addEventListener('click', function () {
+    if (traineeNameOrder === 'desc') return;
+    traineeNameOrder = 'desc';
+    sessionStorage.setItem('ojt-admin-trainee-name-order', 'desc');
+    updateTraineeSortButtons();
+    loadUserList();
+  });
+  updateTraineeSortButtons();
+
   async function loadUserList() {
     const q = document.getElementById('user-search').value.trim();
-    const parts = [];
-    if (q) parts.push('q=' + encodeURIComponent(q));
-    if (selectedAdminBatchId !== null) parts.push('batch_id=' + selectedAdminBatchId);
-    const url = parts.length ? '/api/admin/users?' + parts.join('&') : '/api/admin/users';
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (selectedAdminBatchId !== null) params.set('batch_id', String(selectedAdminBatchId));
+    params.set('name_order', traineeNameOrder);
+    const url = '/api/admin/users?' + params.toString();
     const box = document.getElementById('admin-user-list');
     box.innerHTML =
       '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
@@ -335,10 +468,29 @@
     }
     users.forEach(function (u) {
       const el = document.createElement('div');
-      el.className = 'list-item';
-      el.innerHTML = '<strong>' + escapeHtml(u.name) + '</strong> — ' + escapeHtml(u.course) +
+      el.className = 'list-item list-item--row';
+      const main = document.createElement('div');
+      main.className = 'list-item__main';
+      main.innerHTML =
+        '<strong>' + escapeHtml(u.name) + '</strong> — ' + escapeHtml(u.course) +
         '<br><span class="muted">' + escapeHtml(u.batch_name) + '</span>';
-      el.addEventListener('click', function () { openUser(u.id); });
+      main.addEventListener('click', function () {
+        openUser(u.id);
+      });
+      const actions = document.createElement('div');
+      actions.className = 'list-item__right';
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'danger admin-inline-btn';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        if (!confirm('Delete ' + u.name + ' and all their time entries?')) return;
+        deleteTrainee(u.id);
+      });
+      actions.appendChild(delBtn);
+      el.appendChild(main);
+      el.appendChild(actions);
       box.appendChild(el);
     });
   }
@@ -347,6 +499,22 @@
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  async function deleteTrainee(userId) {
+    const r = await fetch('/api/admin/user/' + userId, { method: 'DELETE' });
+    const d = await r.json();
+    if (!r.ok) {
+      alert(d.error || 'Delete failed');
+      return;
+    }
+    if (currentUserId === userId) {
+      currentUserId = null;
+      document.getElementById('admin-user-panel').classList.add('hidden');
+    }
+    adminBatchesCache = null;
+    await loadAdminBatches(true);
+    loadUserList();
   }
 
   document.getElementById('btn-close-user').addEventListener('click', function () {
@@ -451,16 +619,7 @@
   document.getElementById('btn-delete-user').addEventListener('click', async function () {
     if (!currentUserId) return;
     if (!confirm('Delete this trainee and all their time entries?')) return;
-    const r = await fetch('/api/admin/user/' + currentUserId, { method: 'DELETE' });
-    const d = await r.json();
-    if (!r.ok) {
-      alert(d.error || 'Delete failed');
-      return;
-    }
-    currentUserId = null;
-    document.getElementById('admin-user-panel').classList.add('hidden');
-    loadAdminBatches();
-    loadUserList();
+    await deleteTrainee(currentUserId);
   });
 
   const entriesPageInput = document.getElementById('entries-page-input');

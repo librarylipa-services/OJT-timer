@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #0c1017;
   --bg-elevated: #111820;
   --surface: #161d2a;
@@ -39,6 +40,7 @@ body {
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  transition: background 0.35s ease, color 0.3s ease;
 }
 
 .layout {
@@ -1683,5 +1685,180 @@ table.admin-entries-table .admin-entries-table__actions {
     flex: 1 1 calc(50% - 0.35rem);
     width: auto;
     max-width: none;
+  }
+}
+
+/* --- Theme bar (global light / dark toggle) --- */
+.theme-bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0.35rem 0 0.55rem;
+  margin: 0 0 0.2rem;
+  border-bottom: 1px solid var(--border);
+  transition: border-color 0.3s ease;
+}
+
+.theme-toggle {
+  font-size: 0.82rem;
+  padding: 0.38rem 0.9rem;
+  min-height: 2.2rem;
+}
+
+@media (max-width: 720px) {
+  .theme-bar {
+    padding-left: 0.1rem;
+    padding-right: 0.1rem;
+  }
+}
+
+/* Light theme: custom properties on <html data-theme="light"> (dark = default, no attribute) */
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef1f7;
+  --bg-elevated: #e4e9f2;
+  --surface: #ffffff;
+  --surface-hover: #f0f4fb;
+  --border: #c9d4e6;
+  --border-strong: #a8b9d6;
+  --text: #15202b;
+  --muted: #5c6b80;
+  --accent: #2563eb;
+  --accent-dim: #1d4ed8;
+  --accent-glow: rgba(37, 99, 235, 0.22);
+  --success: #059669;
+  --warn: #b45309;
+  --card-shadow: 0 4px 20px rgba(15, 23, 42, 0.08);
+  --card-ring: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+html[data-theme="light"] body {
+  background-image: radial-gradient(ellipse 120% 80% at 50% -18%, rgba(37, 99, 235, 0.07), transparent 56%);
+}
+
+@media (min-width: 721px) {
+  html[data-theme="light"] .sidebar {
+    box-shadow: 4px 0 24px rgba(15, 23, 42, 0.06);
+  }
+}
+
+html[data-theme="light"] th {
+  background: rgba(15, 23, 42, 0.055);
+}
+
+html[data-theme="light"] .modal-backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+html[data-theme="light"] .method-pill--scan {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+html[data-theme="light"] .method-pill--manual {
+  background: rgba(217, 119, 6, 0.12);
+  color: #9a3412;
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+html[data-theme="light"] .method-pill--pending {
+  border-color: var(--border-strong);
+  color: var(--muted);
+}
+
+html[data-theme="light"] .form-register .label-field {
+  color: #3d4d64;
+}
+
+html[data-theme="light"] .error {
+  color: #dc2626;
+}
+
+html[data-theme="light"] .table-responsive--admin-entries {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+html[data-theme="light"] .sidebar-nav a.active {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+  color: #0f172a;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+html[data-theme="light"] .scan-desk-details {
+  background: var(--surface-hover);
+}
+
+html[data-theme="light"] .card--inset {
+  background: var(--bg-elevated);
+}
+
+html[data-theme="light"] .list-item.active {
+  background: rgba(37, 99, 235, 0.1);
+}
+
+html[data-theme="light"] .clock-action-modal__badge--in {
+  background: rgba(5, 150, 105, 0.15);
+  color: var(--success);
+  box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.35);
+}
+
+html[data-theme="light"] .clock-action-modal__badge--out {
+  background: rgba(180, 83, 9, 0.12);
+  color: var(--warn);
+  box-shadow: 0 0 0 1px rgba(180, 83, 9, 0.3);
+}
+
+/* Theme cross-fade on common surfaces (toggle is infrequent) */
+.sidebar,
+.card,
+.modal,
+.page-skeleton-overlay,
+.list-item,
+.entries-pagination,
+.scan-desk-details,
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="datetime-local"],
+select,
+textarea,
+table th {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease, box-shadow 0.3s ease;
+}
+
+button.secondary,
+button.danger,
+.btn {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease, filter 0.15s ease, box-shadow 0.3s ease;
+}
+
+.sidebar-nav a {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease, box-shadow 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body,
+  .sidebar,
+  .card,
+  .modal,
+  .page-skeleton-overlay,
+  .list-item,
+  .entries-pagination,
+  .scan-desk-details,
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="datetime-local"],
+  select,
+  textarea,
+  table th,
+  button.secondary,
+  button.danger,
+  .btn,
+  .sidebar-nav a {
+    transition-duration: 0.01ms !important;
   }
 }

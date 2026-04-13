@@ -115,6 +115,21 @@
     <div class="success hidden" id="user-save-ok"></div>
     <div class="error hidden" id="user-save-err"></div>
 
+    <h4 class="section-heading section-heading--loose">Add entry</h4>
+    <p class="muted section-heading__lead">Add a session manually, then review and edit it in the table below.</p>
+    <div class="grid-2">
+      <div class="form-row">
+        <label>Time in</label>
+        <input type="datetime-local" id="new-entry-in">
+      </div>
+      <div class="form-row">
+        <label>Time out (optional)</label>
+        <input type="datetime-local" id="new-entry-out">
+      </div>
+    </div>
+    <button type="button" id="btn-add-entry">Add entry</button>
+    <div class="error hidden" id="entry-err"></div>
+
     <h4 class="section-heading section-heading--loose">Time entries</h4>
     <p class="muted">Edit time in/out (local ISO). Empty time out = open session.</p>
     <div class="table-responsive table-responsive--admin-entries">
@@ -135,19 +150,6 @@
       </div>
       <button type="button" class="secondary" id="btn-entries-next">Next</button>
     </div>
-    <h4 class="section-heading">Add entry</h4>
-    <div class="grid-2">
-      <div class="form-row">
-        <label>Time in</label>
-        <input type="datetime-local" id="new-entry-in">
-      </div>
-      <div class="form-row">
-        <label>Time out (optional)</label>
-        <input type="datetime-local" id="new-entry-out">
-      </div>
-    </div>
-    <button type="button" id="btn-add-entry">Add entry</button>
-    <div class="error hidden" id="entry-err"></div>
 
     <p class="muted field-hint field-hint--block">QR image URL:</p>
     <code id="edit-qr-url" style="word-break:break-all;font-size:0.85rem"></code>

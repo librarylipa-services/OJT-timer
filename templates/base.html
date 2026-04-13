@@ -1,6 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('ojt-theme') === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      } catch (e) {}
+    })();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0c1017">
@@ -33,6 +42,9 @@
       </nav>
     </aside>
     <main>
+      <div class="theme-bar">
+        <button type="button" class="secondary theme-toggle" id="theme-toggle" aria-pressed="false" aria-label="Switch to light mode">Light mode</button>
+      </div>
       <div id="page-skeleton-overlay" class="page-skeleton-overlay" aria-busy="true" aria-live="polite" aria-label="Loading page">
         <div class="page-skeleton-shell">
           <div class="page-skeleton-header">
@@ -51,6 +63,7 @@
   {% if supabase_url and supabase_anon_key %}
   <script type="module" src="{{ url_for('static', filename='js/supabase-client.mjs') }}"></script>
   {% endif %}
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/page-skeleton.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>

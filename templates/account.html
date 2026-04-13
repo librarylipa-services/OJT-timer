@@ -120,7 +120,6 @@
   let selectedBatchName = '';
   let selectedUserId = null;
   let selectedEntryId = null;
-  let accountListInitialLoad = true;
   let detailEntriesPage = 1;
 
   const stepBatches = document.getElementById('step-batches');
@@ -136,18 +135,25 @@
 
   async function fetchBatches(q) {
     const url = q ? '/api/batches?q=' + encodeURIComponent(q) : '/api/batches';
-    batchList.innerHTML = '';
-    if (accountListInitialLoad) {
+    if (typeof ojtCacheIsFresh === 'function' && ojtCacheIsFresh(url, 45000) && window.removePageSkeleton) {
+      window.removePageSkeleton();
+    }
+    var needSkel = typeof ojtCacheIsFresh !== 'function' || !ojtCacheIsFresh(url, 45000);
+    if (needSkel) {
       batchList.innerHTML =
         '<div class="list-item skeleton"></div><div class="list-item skeleton"></div>' +
         '<div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
     }
-    const r = await fetch(url);
-    const d = await r.json();
+    const r = await window.ojtFetchJson(url, {}, { ttlMs: 45000 });
+    var d = r.data || {};
     batchList.innerHTML = '';
+    if (!r.ok) {
+      batchList.innerHTML = '<p class="muted">Could not load batches.</p>';
+      if (window.removePageSkeleton) window.removePageSkeleton();
+      return;
+    }
     if (!d.batches || d.batches.length === 0) {
       batchList.innerHTML = '<p class="muted">No batches match.</p>';
-      accountListInitialLoad = false;
       if (window.removePageSkeleton) {
         window.removePageSkeleton();
       }
@@ -164,7 +170,6 @@
       });
       batchList.appendChild(el);
     });
-    accountListInitialLoad = false;
     if (window.removePageSkeleton) {
       window.removePageSkeleton();
     }
@@ -192,10 +197,19 @@
     stepUsers.classList.remove('hidden');
     stepDetail.classList.add('hidden');
     document.getElementById('users-batch-title').textContent = selectedBatchName;
-    userList.innerHTML = '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
-    const r = await fetch('/api/account/batch/' + selectedBatchId + '/users');
-    const d = await r.json();
+    const url = '/api/account/batch/' + selectedBatchId + '/users';
+    var needSkel = typeof ojtCacheIsFresh !== 'function' || !ojtCacheIsFresh(url, 45000);
+    if (needSkel) {
+      userList.innerHTML =
+        '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
+    }
+    const r = await window.ojtFetchJson(url, {}, { ttlMs: 45000 });
+    var d = r.data || {};
     userList.innerHTML = '';
+    if (!r.ok) {
+      userList.innerHTML = '<p class="muted">Could not load trainees.</p>';
+      return;
+    }
     if (!d.users || d.users.length === 0) {
       userList.innerHTML = '<p class="muted">No trainees in this batch.</p>';
       return;
@@ -255,11 +269,17 @@
       return;
     }
     pwdModal.classList.add('hidden');
+    if (typeof ojtCacheInvalidateContains === 'function') {
+      ojtCacheInvalidateContains('/api/account/user/');
+    }
     await loadDetail(true);
   });
 
   document.getElementById('btn-logout-account').addEventListener('click', async function () {
     await fetch('/api/account/logout', { method: 'POST' });
+    if (typeof ojtCacheInvalidateContains === 'function') {
+      ojtCacheInvalidateContains('/api/account/');
+    }
     stepDetail.classList.add('hidden');
     stepUsers.classList.remove('hidden');
     showUsers();
@@ -275,19 +295,22 @@
     tbody.innerHTML = '';
     var skRow =
       '<tr class="table-skeleton-row"><td colspan="5"><div class="skeleton skeleton-inline"></div></td></tr>';
-    tbody.innerHTML = skRow + skRow + skRow + skRow + skRow + skRow;
+    const detailUrl =
+      '/api/account/user/' + selectedUserId + '/detail?page=' + encodeURIComponent(detailEntriesPage);
+    var needDetailSkel = typeof ojtCacheIsFresh !== 'function' || !ojtCacheIsFresh(detailUrl, 30000);
+    if (needDetailSkel) {
+      tbody.innerHTML = skRow + skRow + skRow + skRow + skRow + skRow;
+    }
     prevPg.disabled = true;
     nextPg.disabled = true;
-    const r = await fetch(
-      '/api/account/user/' + selectedUserId + '/detail?page=' + encodeURIComponent(detailEntriesPage)
-    );
+    const r = await window.ojtFetchJson(detailUrl, {}, { ttlMs: 30000 });
     if (r.status === 401) {
       tbody.innerHTML = '';
       pwdModal.classList.remove('hidden');
       return null;
     }
-    const d = await r.json();
-    if (!r.ok) {
+    var d = r.data;
+    if (!r.ok || !d) {
       tbody.innerHTML = '';
       return null;
     }
@@ -432,7 +455,10 @@
     }
     okEl.textContent = 'Updated. Download the ID again to get the new picture.';
     okEl.classList.remove('hidden');
-    loadDetail(false);
+    if (typeof ojtCacheInvalidateContains === 'function') {
+      ojtCacheInvalidateContains('/api/account/user/');
+    }
+    await loadDetail(false);
   });
 
   function openEntryNotePanel(e) {
@@ -461,6 +487,9 @@
       }
     );
     if (r.ok) {
+      if (typeof ojtCacheInvalidateContains === 'function') {
+        ojtCacheInvalidateContains('/api/account/user/');
+      }
       await loadDetail(false);
     } else {
       el.textContent = 'Could not save (session expired?)';

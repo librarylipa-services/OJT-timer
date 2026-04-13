@@ -157,10 +157,18 @@
 
   async function loadBatches() {
     try {
-      const r = await fetch('/api/batches');
-      const d = await r.json();
+      if (typeof ojtCacheIsFresh === 'function' && ojtCacheIsFresh('/api/batches', 45000) && window.removePageSkeleton) {
+        window.removePageSkeleton();
+      }
+      const r = await window.ojtFetchJson('/api/batches', {}, { ttlMs: 60000 });
+      const d = r.data || {};
       batchSelect.innerHTML = '';
-      if (!d.batches || d.batches.length === 0) {
+      if (!r.ok || !d.batches || d.batches.length === 0) {
+        if (!r.ok) {
+          batchSelect.innerHTML = '<option value="">Could not load batches</option>';
+          batchSelect.disabled = true;
+          return;
+        }
         batchSelect.innerHTML = '<option value="">No batches — ask admin to create one</option>';
         batchSelect.disabled = true;
         return;
@@ -243,6 +251,9 @@
       qrToken.textContent = data.sr_code;
       form.reset();
       passwordTouched = false;
+      if (typeof ojtCacheInvalidateContains === 'function') {
+        ojtCacheInvalidateContains('/api/batches');
+      }
       loadBatches();
       showRegisterSuccessModal();
     } catch (err) {

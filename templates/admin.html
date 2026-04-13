@@ -246,12 +246,13 @@
     }
     document.getElementById('admin-login-panel').classList.add('hidden');
     document.getElementById('admin-app').classList.remove('hidden');
-    adminBatchesCache = null;
+    invalidateAdminApiCache();
     await Promise.all([loadAdminBatches(true), loadUserList()]);
   });
 
   document.getElementById('btn-admin-logout').addEventListener('click', async function () {
     await fetch('/api/admin/logout', { method: 'POST' });
+    invalidateAdminApiCache();
     document.getElementById('admin-app').classList.add('hidden');
     document.getElementById('admin-login-panel').classList.remove('hidden');
     document.getElementById('admin-pwd').value = '';
@@ -277,7 +278,7 @@
     okEl.textContent = 'Batch created.';
     okEl.classList.remove('hidden');
     document.getElementById('new-batch-name').value = '';
-    adminBatchesCache = null;
+    invalidateAdminApiCache();
     await loadAdminBatches(true);
     loadUserList();
   });
@@ -382,7 +383,7 @@
     if (selectedAdminBatchId === batchId) {
       selectedAdminBatchName = name;
     }
-    adminBatchesCache = null;
+    invalidateAdminApiCache();
     await loadAdminBatches(true);
     loadUserList();
   }
@@ -417,9 +418,35 @@
         document.getElementById('admin-user-panel').classList.add('hidden');
       }
     }
-    adminBatchesCache = null;
+    invalidateAdminApiCache();
     await loadAdminBatches(true);
     loadUserList();
+  }
+
+  function invalidateAdminApiCache() {
+    if (typeof ojtCacheInvalidateContains === 'function') {
+      ojtCacheInvalidateContains('/api/admin');
+    }
+    adminBatchesCache = null;
+  }
+
+  /** Invalidate GET caches for one trainee without clearing batch list (safe for user 12 vs 123). */
+  function invalidateCachedAdminUser(userId) {
+    var id = String(userId);
+    if (typeof ojtCacheInvalidateUrl === 'function') {
+      ojtCacheInvalidateUrl('/api/admin/user/' + id);
+    }
+    if (typeof ojtCacheInvalidateContains === 'function') {
+      ojtCacheInvalidateContains('/api/admin/user/' + id + '/entries');
+    }
+  }
+
+  /** After profile edits: sidebar list + user detail + entries. */
+  function invalidateCachedAdminUserAndTraineeList(userId) {
+    if (typeof ojtCacheInvalidateContains === 'function') {
+      ojtCacheInvalidateContains('/api/admin/users');
+    }
+    invalidateCachedAdminUser(userId);
   }
 
   async function loadAdminBatches(forceRefresh) {
@@ -428,9 +455,16 @@
       renderAdminBatchList();
       return;
     }
-    box.innerHTML =
-      '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
-    const r = await fetch('/api/admin/batches');
+    var url = '/api/admin/batches';
+    var needSkel =
+      forceRefresh ||
+      typeof ojtCacheIsFresh !== 'function' ||
+      !ojtCacheIsFresh(url, 45000);
+    if (needSkel) {
+      box.innerHTML =
+        '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
+    }
+    const r = await window.ojtFetchJson(url, {}, { ttlMs: 45000, bypassCache: !!forceRefresh });
     if (r.status === 403) {
       document.getElementById('admin-app').classList.add('hidden');
       document.getElementById('admin-login-panel').classList.remove('hidden');
@@ -438,7 +472,7 @@
       adminBatchesCache = null;
       return;
     }
-    const d = await r.json();
+    var d = r.data || {};
     adminBatchesCache = d.batches || [];
     renderAdminBatchList();
   }
@@ -484,16 +518,19 @@
     params.set('name_order', traineeNameOrder);
     const url = '/api/admin/users?' + params.toString();
     const box = document.getElementById('admin-user-list');
-    box.innerHTML =
-      '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
-    const r = await fetch(url);
+    var needSkel = typeof ojtCacheIsFresh !== 'function' || !ojtCacheIsFresh(url, 45000);
+    if (needSkel) {
+      box.innerHTML =
+        '<div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div><div class="list-item skeleton"></div>';
+    }
+    const r = await window.ojtFetchJson(url, {}, { ttlMs: 45000 });
     if (r.status === 403) {
       document.getElementById('admin-app').classList.add('hidden');
       document.getElementById('admin-login-panel').classList.remove('hidden');
       box.innerHTML = '';
       return;
     }
-    const d = await r.json();
+    var d = r.data || {};
     box.innerHTML = '';
     const users = d.users || [];
     if (users.length === 0) {
@@ -565,7 +602,7 @@
       currentUserId = null;
       document.getElementById('admin-user-panel').classList.add('hidden');
     }
-    adminBatchesCache = null;
+    invalidateAdminApiCache();
     await loadAdminBatches(true);
     loadUserList();
   }
@@ -666,6 +703,7 @@
     }
     okEl.textContent = 'Updated. Download the ID again to get the new picture.';
     okEl.classList.remove('hidden');
+    invalidateCachedAdminUser(currentUserId);
     openUser(currentUserId);
   });
 
@@ -756,13 +794,17 @@
       const tbody = document.getElementById('admin-entries-body');
       var skRow =
         '<tr class="table-skeleton-row"><td colspan="7"><div class="skeleton skeleton-inline"></div></td></tr>';
-      tbody.innerHTML = skRow + skRow + skRow + skRow + skRow;
       const ep = new URLSearchParams();
       ep.set('page', String(requestedPage));
       ep.set('sort', entrySortColumn);
       ep.set('order', entrySortOrder);
-      const r = await fetch('/api/admin/user/' + currentUserId + '/entries?' + ep.toString());
-      const d = await r.json();
+      var entriesUrl = '/api/admin/user/' + currentUserId + '/entries?' + ep.toString();
+      var needEntSkel = typeof ojtCacheIsFresh !== 'function' || !ojtCacheIsFresh(entriesUrl, 30000);
+      if (needEntSkel) {
+        tbody.innerHTML = skRow + skRow + skRow + skRow + skRow;
+      }
+      const r = await window.ojtFetchJson(entriesUrl, {}, { ttlMs: 30000 });
+      var d = r.data || {};
       if (!r.ok) {
         tbody.innerHTML = '';
         return;
@@ -831,6 +873,7 @@
               }),
             });
             if (res.ok) {
+              invalidateCachedAdminUser(currentUserId);
               openUser(currentUserId);
             }
           } finally {
@@ -844,6 +887,7 @@
           if (!confirm('Delete this entry?')) return;
           const id = btn.getAttribute('data-id');
           await fetch('/api/admin/entry/' + id, { method: 'DELETE' });
+          invalidateCachedAdminUser(currentUserId);
           openUser(currentUserId);
         });
       });
@@ -896,7 +940,9 @@
     }
     okEl.textContent = 'Saved.';
     okEl.classList.remove('hidden');
-    openUser(currentUserId);
+    invalidateCachedAdminUserAndTraineeList(currentUserId);
+    await openUser(currentUserId);
+    await loadUserList();
   });
 
   document.getElementById('btn-add-entry').addEventListener('click', async function () {
@@ -928,6 +974,7 @@
       }
       document.getElementById('new-entry-in').value = '';
       document.getElementById('new-entry-out').value = '';
+      invalidateCachedAdminUser(currentUserId);
       openUser(currentUserId);
     } finally {
       btn.disabled = false;

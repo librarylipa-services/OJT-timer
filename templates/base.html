@@ -63,6 +63,7 @@
   {% if supabase_url and supabase_anon_key %}
   <script type="module" src="{{ url_for('static', filename='js/supabase-client.mjs') }}"></script>
   {% endif %}
+  <script src="{{ url_for('static', filename='js/api-cache.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/page-skeleton.js') }}"></script>
   {% block scripts %}{% endblock %}

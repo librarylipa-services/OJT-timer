@@ -138,7 +138,15 @@
     <div class="error hidden" id="entry-err"></div>
 
     <h4 class="section-heading section-heading--loose">Time entries</h4>
-    <p class="muted">Edit time in/out (local ISO). Empty time out = open session.</p>
+    <p class="muted">Edit time in/out (local ISO). Empty time out = open session. <strong>A–Z</strong> = earliest first, <strong>Z–A</strong> = latest first for that column. Open sessions sort last when sorting by Time out.</p>
+    <div class="admin-entry-sort-toolbar" role="group" aria-label="Sort time entries">
+      <span class="muted admin-entry-sort-toolbar__label">Time in</span>
+      <button type="button" class="secondary admin-sort-btn admin-entry-sort-btn" id="btn-entries-sort-tin-az" title="Time in: earliest → latest">A–Z</button>
+      <button type="button" class="secondary admin-sort-btn admin-entry-sort-btn" id="btn-entries-sort-tin-za" title="Time in: latest → earliest">Z–A</button>
+      <span class="muted admin-entry-sort-toolbar__label">Time out</span>
+      <button type="button" class="secondary admin-sort-btn admin-entry-sort-btn" id="btn-entries-sort-tout-az" title="Time out: earliest → latest">A–Z</button>
+      <button type="button" class="secondary admin-sort-btn admin-entry-sort-btn" id="btn-entries-sort-tout-za" title="Time out: latest → earliest">Z–A</button>
+    </div>
     <div class="table-responsive table-responsive--admin-entries">
       <table class="admin-entries-table">
         <thead>
@@ -172,6 +180,14 @@
   let adminBatchesCache = null;
   let entriesPage = 1;
   let lastEntryListTotalPages = 1;
+  let entrySortColumn = sessionStorage.getItem('ojt-admin-entry-sort-col') || 'time_in';
+  let entrySortOrder = sessionStorage.getItem('ojt-admin-entry-sort-order') || 'asc';
+  if (entrySortColumn !== 'time_in' && entrySortColumn !== 'time_out') {
+    entrySortColumn = 'time_in';
+  }
+  if (entrySortOrder !== 'asc' && entrySortOrder !== 'desc') {
+    entrySortOrder = 'asc';
+  }
   let traineeNameOrder = sessionStorage.getItem('ojt-admin-trainee-name-order') || 'asc';
   if (traineeNameOrder !== 'asc' && traineeNameOrder !== 'desc') {
     traineeNameOrder = 'asc';
@@ -346,10 +362,17 @@
   }
 
   async function renameBatch(batchId, name) {
+    const pw = window.prompt('Enter admin password to rename this batch:');
+    if (pw === null) return;
+    const pwTrim = pw.trim();
+    if (!pwTrim) {
+      alert('Admin password is required.');
+      return;
+    }
     const r = await fetch('/api/admin/batches/' + batchId, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name }),
+      body: JSON.stringify({ name: name, password: pwTrim }),
     });
     const d = await r.json();
     if (!r.ok) {
@@ -365,7 +388,18 @@
   }
 
   async function deleteBatchById(batchId) {
-    const r = await fetch('/api/admin/batches/' + batchId, { method: 'DELETE' });
+    const pw = window.prompt('Enter admin password to delete this batch:');
+    if (pw === null) return;
+    const pwTrim = pw.trim();
+    if (!pwTrim) {
+      alert('Admin password is required.');
+      return;
+    }
+    const r = await fetch('/api/admin/batches/' + batchId, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwTrim }),
+    });
     const d = await r.json();
     if (!r.ok) {
       alert(d.error || 'Delete failed');
@@ -485,7 +519,6 @@
       delBtn.textContent = 'Delete';
       delBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
-        if (!confirm('Delete ' + u.name + ' and all their time entries?')) return;
         deleteTrainee(u.id);
       });
       actions.appendChild(delBtn);
@@ -502,7 +535,27 @@
   }
 
   async function deleteTrainee(userId) {
-    const r = await fetch('/api/admin/user/' + userId, { method: 'DELETE' });
+    const sr = window.prompt(
+      'Type this trainee\'s SR-Code exactly as registered (to confirm permanent deletion):'
+    );
+    if (sr === null) return;
+    const srTrim = sr.trim();
+    if (!srTrim) {
+      alert('SR-Code is required.');
+      return;
+    }
+    const pw = window.prompt('Enter admin password to delete this trainee:');
+    if (pw === null) return;
+    const pwTrim = pw.trim();
+    if (!pwTrim) {
+      alert('Admin password is required.');
+      return;
+    }
+    const r = await fetch('/api/admin/user/' + userId, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sr_code: srTrim, password: pwTrim }),
+    });
     const d = await r.json();
     if (!r.ok) {
       alert(d.error || 'Delete failed');
@@ -618,7 +671,6 @@
 
   document.getElementById('btn-delete-user').addEventListener('click', async function () {
     if (!currentUserId) return;
-    if (!confirm('Delete this trainee and all their time entries?')) return;
     await deleteTrainee(currentUserId);
   });
 
@@ -650,6 +702,46 @@
   });
   document.getElementById('btn-entries-go').addEventListener('click', applyEntriesPageJump);
 
+  function updateEntrySortToolbar() {
+    [
+      ['btn-entries-sort-tin-az', 'time_in', 'asc'],
+      ['btn-entries-sort-tin-za', 'time_in', 'desc'],
+      ['btn-entries-sort-tout-az', 'time_out', 'asc'],
+      ['btn-entries-sort-tout-za', 'time_out', 'desc'],
+    ].forEach(function (row) {
+      var btn = document.getElementById(row[0]);
+      if (!btn) return;
+      var on = entrySortColumn === row[1] && entrySortOrder === row[2];
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.classList.toggle('admin-sort-btn--active', on);
+    });
+  }
+
+  function setEntrySort(col, ord) {
+    if (entrySortColumn === col && entrySortOrder === ord) return;
+    entrySortColumn = col;
+    entrySortOrder = ord;
+    sessionStorage.setItem('ojt-admin-entry-sort-col', col);
+    sessionStorage.setItem('ojt-admin-entry-sort-order', ord);
+    entriesPage = 1;
+    updateEntrySortToolbar();
+    loadEntries();
+  }
+
+  document.getElementById('btn-entries-sort-tin-az').addEventListener('click', function () {
+    setEntrySort('time_in', 'asc');
+  });
+  document.getElementById('btn-entries-sort-tin-za').addEventListener('click', function () {
+    setEntrySort('time_in', 'desc');
+  });
+  document.getElementById('btn-entries-sort-tout-az').addEventListener('click', function () {
+    setEntrySort('time_out', 'asc');
+  });
+  document.getElementById('btn-entries-sort-tout-za').addEventListener('click', function () {
+    setEntrySort('time_out', 'desc');
+  });
+  updateEntrySortToolbar();
+
   async function loadEntries() {
     if (!currentUserId) return;
     const requestedPage = entriesPage;
@@ -665,7 +757,11 @@
       var skRow =
         '<tr class="table-skeleton-row"><td colspan="7"><div class="skeleton skeleton-inline"></div></td></tr>';
       tbody.innerHTML = skRow + skRow + skRow + skRow + skRow;
-      const r = await fetch('/api/admin/user/' + currentUserId + '/entries?page=' + requestedPage);
+      const ep = new URLSearchParams();
+      ep.set('page', String(requestedPage));
+      ep.set('sort', entrySortColumn);
+      ep.set('order', entrySortOrder);
+      const r = await fetch('/api/admin/user/' + currentUserId + '/entries?' + ep.toString());
       const d = await r.json();
       if (!r.ok) {
         tbody.innerHTML = '';

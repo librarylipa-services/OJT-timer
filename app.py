@@ -1751,11 +1751,22 @@ def api_admin_user_delete(user_id):
     err = require_admin()
     if err:
         return err
+    data = request.get_json(silent=True) or {}
+    pw = (data.get("password") or "").strip()
+    sr_in = (data.get("sr_code") or "").strip()
+    if not pw or not sr_in:
+        return jsonify({"error": "sr_code and admin password required"}), 400
+    if pw != ADMIN_PASSWORD:
+        return jsonify({"error": "Invalid admin password"}), 401
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id FROM ojt_users WHERE id = ?", (user_id,))
-    if not cur.fetchone():
+    cur.execute("SELECT id, sr_code FROM ojt_users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    if not row:
         return jsonify({"error": "Not found"}), 404
+    db_sr = (row["sr_code"] or "").strip()
+    if sr_in != db_sr:
+        return jsonify({"error": "SR-Code does not match this trainee"}), 400
     cur.execute("DELETE FROM time_entries WHERE user_id = ?", (user_id,))
     cur.execute("DELETE FROM ojt_users WHERE id = ?", (user_id,))
     db.commit()
@@ -1938,6 +1949,18 @@ def require_admin():
     return None
 
 
+def verify_admin_password_in_data(data):
+    """Require `password` in JSON body matching OJT_ADMIN_PASSWORD. Returns None or (response, status)."""
+    if not isinstance(data, dict):
+        data = {}
+    pw = (data.get("password") or "").strip()
+    if not pw:
+        return (jsonify({"error": "Admin password required"}), 400)
+    if pw != ADMIN_PASSWORD:
+        return (jsonify({"error": "Invalid admin password"}), 401)
+    return None
+
+
 @app.post("/api/admin/batches")
 def api_admin_create_batch():
     err = require_admin()
@@ -2005,6 +2028,9 @@ def api_admin_batch_update(batch_id):
     if err:
         return err
     data = request.get_json(silent=True) or {}
+    pw_err = verify_admin_password_in_data(data)
+    if pw_err:
+        return pw_err
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Batch name required"}), 400
@@ -2029,6 +2055,10 @@ def api_admin_batch_delete(batch_id):
     err = require_admin()
     if err:
         return err
+    data = request.get_json(silent=True) or {}
+    pw_err = verify_admin_password_in_data(data)
+    if pw_err:
+        return pw_err
     db = get_db()
     cur = db.cursor()
     cur.execute("SELECT id FROM batches WHERE id = ?", (batch_id,))
@@ -2267,12 +2297,28 @@ def api_admin_user_entries(user_id):
     if page > total_pages:
         page = total_pages
     offset = (page - 1) * page_size
+    es = (request.args.get("sort") or "time_in").strip().lower()
+    eo = (request.args.get("order") or "asc").strip().lower()
+    if es not in ("time_in", "time_out"):
+        return jsonify({"error": "sort must be time_in or time_out"}), 400
+    if eo not in ("asc", "desc"):
+        return jsonify({"error": "order must be asc or desc"}), 400
+    ord_sql = "ASC" if eo == "asc" else "DESC"
+    if es == "time_in":
+        order_clause = f"ORDER BY time_in {ord_sql}"
+    else:
+        # Open sessions (no time_out): always after rows with a time out
+        open_last = (
+            "(CASE WHEN time_out IS NULL OR TRIM(COALESCE(time_out, '')) = '' "
+            "THEN 1 ELSE 0 END)"
+        )
+        order_clause = f"ORDER BY {open_last} ASC, time_out {ord_sql}"
     cur.execute(
-        """
+        f"""
         SELECT id, time_in, time_out, session_note, time_in_method, time_out_method
         FROM time_entries
         WHERE user_id = ?
-        ORDER BY time_in
+        {order_clause}
         LIMIT ? OFFSET ?
         """,
         (user_id, page_size, offset),
@@ -2301,6 +2347,8 @@ def api_admin_user_entries(user_id):
             "page_size": page_size,
             "total": total,
             "total_pages": total_pages,
+            "sort": es,
+            "order": eo,
         }
     )
 

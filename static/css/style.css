@@ -1035,6 +1035,19 @@ html[data-theme="light"] button.admin-sort-btn.admin-sort-btn--active {
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.15);
 }
 
+.admin-entry-sort-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  margin-bottom: 0.65rem;
+}
+
+.admin-entry-sort-toolbar__label {
+  font-size: 0.85rem;
+  margin-right: 0.1rem;
+}
+
 .progress {
   display: flex;
   align-items: center;

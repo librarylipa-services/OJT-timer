@@ -64,9 +64,18 @@
   <div class="form-register__actions">
     <button type="submit" class="form-register__submit">Register</button>
     <div class="error hidden" id="reg-error"></div>
-    <div class="success hidden" id="reg-success"></div>
+    <div class="success hidden" id="reg-success" aria-live="polite"></div>
   </div>
 </form>
+
+<div class="modal-backdrop hidden" id="register-success-modal" role="dialog" aria-modal="true" aria-labelledby="register-success-title">
+  <div class="modal clock-action-modal">
+    <div class="clock-action-modal__badge clock-action-modal__badge--in" aria-hidden="true">✓</div>
+    <h3 class="card-title" id="register-success-title">Registered successfully</h3>
+    <p class="muted clock-action-modal__sub" id="register-success-sub">Your QR code is shown below. Save or print it for clock in/out at Home.</p>
+    <button type="button" id="register-success-dismiss">OK</button>
+  </div>
+</div>
 
 <div class="card form-register-success hidden" id="qr-card">
   <div class="form-register-success__layout">
@@ -95,6 +104,9 @@
   const qrCard = document.getElementById('qr-card');
   const qrImg = document.getElementById('qr-img');
   const qrToken = document.getElementById('qr-token');
+  const registerSuccessModal = document.getElementById('register-success-modal');
+  const registerSuccessDismiss = document.getElementById('register-success-dismiss');
+  let registerSuccessModalTimer = null;
   const srCodeInput = document.getElementById('sr_code');
   const passwordInput = document.getElementById('password');
   const deptInput = document.getElementById('department');
@@ -165,6 +177,39 @@
   }
   loadBatches();
 
+  function hideRegisterSuccessModal() {
+    if (registerSuccessModalTimer) {
+      clearTimeout(registerSuccessModalTimer);
+      registerSuccessModalTimer = null;
+    }
+    registerSuccessModal.classList.add('hidden');
+    document.body.style.overflow = '';
+    if (!qrCard.classList.contains('hidden')) {
+      qrCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function showRegisterSuccessModal() {
+    registerSuccessModal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    registerSuccessDismiss.focus();
+    if (registerSuccessModalTimer) clearTimeout(registerSuccessModalTimer);
+    registerSuccessModalTimer = setTimeout(function () {
+      registerSuccessModalTimer = null;
+      hideRegisterSuccessModal();
+    }, 8000);
+  }
+
+  registerSuccessDismiss.addEventListener('click', hideRegisterSuccessModal);
+  registerSuccessModal.addEventListener('click', function (ev) {
+    if (ev.target === registerSuccessModal) hideRegisterSuccessModal();
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && !registerSuccessModal.classList.contains('hidden')) {
+      hideRegisterSuccessModal();
+    }
+  });
+
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     regError.classList.add('hidden');
@@ -191,14 +236,15 @@
         regError.classList.remove('hidden');
         return;
       }
-      regSuccess.textContent = 'Registered successfully.';
-      regSuccess.classList.remove('hidden');
+      regSuccess.textContent = '';
+      regSuccess.classList.add('hidden');
       qrCard.classList.remove('hidden');
       qrImg.src = data.qr_url + '&t=' + Date.now();
       qrToken.textContent = data.sr_code;
       form.reset();
       passwordTouched = false;
       loadBatches();
+      showRegisterSuccessModal();
     } catch (err) {
       regError.textContent = 'Network error';
       regError.classList.remove('hidden');

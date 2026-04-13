@@ -1789,12 +1789,28 @@ def api_account_user_detail(user_id):
     sh, sm, spent_label = seconds_to_hm(spent_sec)
     lh, lm, left_label = seconds_to_hm(left_sec)
 
+    try:
+        page = int(request.args.get("page", "1"))
+    except (TypeError, ValueError):
+        page = 1
+    if page < 1:
+        page = 1
+    page_size = 10
+    cur.execute("SELECT COUNT(*) AS c FROM time_entries WHERE user_id = ?", (user_id,))
+    total_entries = int((cur.fetchone() or {}).get("c") or 0)
+    total_pages = max(1, (total_entries + page_size - 1) // page_size)
+    if page > total_pages:
+        page = total_pages
+    offset = (page - 1) * page_size
+
     cur.execute(
         """
         SELECT id, time_in, time_out, session_note, time_in_method, time_out_method
-        FROM time_entries WHERE user_id = ? ORDER BY time_in
+        FROM time_entries WHERE user_id = ?
+        ORDER BY time_in DESC
+        LIMIT ? OFFSET ?
         """,
-        (user_id,),
+        (user_id, page_size, offset),
     )
     pairs = []
     for e in cur.fetchall():
@@ -1837,6 +1853,10 @@ def api_account_user_detail(user_id):
             "left_hours": lh,
             "left_minutes": lm,
             "entries": pairs,
+            "page": page,
+            "page_size": page_size,
+            "total_entries": total_entries,
+            "total_pages": total_pages,
         }
     )
 

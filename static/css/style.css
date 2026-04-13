@@ -1463,6 +1463,21 @@ th {
   border: 1px solid var(--border);
 }
 
+.account-detail-sep {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.75rem 0 1.25rem;
+}
+
+.account-entries-pagination {
+  margin-top: 0.65rem;
+}
+
+.account-entries-page-label {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
 @media (max-width: 380px) {
   .sidebar-nav a {
     padding: 0.5rem 0.8rem;

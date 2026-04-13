@@ -50,6 +50,32 @@
     </div>
   </div>
   <p class="muted" style="margin-top:1rem">SR-Code: <code id="detail-sr-code"></code></p>
+
+  <h4 class="section-heading section-heading--loose">Time in / Time out</h4>
+  <p class="muted section-heading__lead">Newest sessions first (10 per page). Click <strong>time in</strong> or <strong>time out</strong> on a row to write a goal or accomplishment for that session.</p>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr><th>Time in</th><th>In via</th><th>Time out</th><th>Out via</th><th>Duration</th></tr>
+      </thead>
+      <tbody id="detail-entries"></tbody>
+    </table>
+  </div>
+  <div class="entries-pagination account-entries-pagination" id="detail-entries-pagination" aria-label="Session history pages">
+    <button type="button" class="secondary" id="btn-detail-entries-prev">Prev</button>
+    <span class="muted account-entries-page-label" id="detail-entries-page-label">Page 1 of 1</span>
+    <button type="button" class="secondary" id="btn-detail-entries-next">Next</button>
+  </div>
+  <div class="card card--inset hidden" id="entry-note-panel">
+    <h4 class="card-title" id="entry-note-heading">Goal &amp; accomplishment (this session)</h4>
+    <textarea id="entry-session-note" class="input-full" placeholder="What you planned or achieved during this time in/out…"></textarea>
+    <button type="button" id="btn-save-entry-note" class="btn-spaced-top">Save for this session</button>
+    <div class="success hidden" id="entry-note-saved"></div>
+  </div>
+
+  <hr class="account-detail-sep" />
+  <h4 class="section-heading">ID &amp; download</h4>
+  <p class="muted section-heading__lead">Download your ID card and preview how it will look.</p>
   <div class="form-row form-row--tight-top">
     <button type="button" class="btn" id="btn-download-id">Download ID (Front + Back)</button>
   </div>
@@ -85,22 +111,6 @@
   <button type="button" class="secondary" id="btn-update-photo">Upload / Update picture</button>
   <div class="success hidden" id="acct-photo-ok"></div>
   <div class="error hidden" id="acct-photo-err"></div>
-  <h4 class="section-heading">Time in / Time out</h4>
-  <p class="muted section-heading__lead">Click <strong>time in</strong> or <strong>time out</strong> on a row to write a goal or accomplishment for that session.</p>
-  <div class="table-responsive">
-    <table>
-      <thead>
-        <tr><th>Time in</th><th>In via</th><th>Time out</th><th>Out via</th><th>Duration</th></tr>
-      </thead>
-      <tbody id="detail-entries"></tbody>
-    </table>
-  </div>
-  <div class="card card--inset hidden" id="entry-note-panel">
-    <h4 class="card-title" id="entry-note-heading">Goal &amp; accomplishment (this session)</h4>
-    <textarea id="entry-session-note" class="input-full" placeholder="What you planned or achieved during this time in/out…"></textarea>
-    <button type="button" id="btn-save-entry-note" class="btn-spaced-top">Save for this session</button>
-    <div class="success hidden" id="entry-note-saved"></div>
-  </div>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -111,6 +121,7 @@
   let selectedUserId = null;
   let selectedEntryId = null;
   let accountListInitialLoad = true;
+  let detailEntriesPage = 1;
 
   const stepBatches = document.getElementById('step-batches');
   const stepUsers = document.getElementById('step-users');
@@ -244,7 +255,7 @@
       return;
     }
     pwdModal.classList.add('hidden');
-    await loadDetail();
+    await loadDetail(true);
   });
 
   document.getElementById('btn-logout-account').addEventListener('click', async function () {
@@ -254,13 +265,22 @@
     showUsers();
   });
 
-  async function loadDetail() {
+  async function loadDetail(resetPage) {
+    if (resetPage) {
+      detailEntriesPage = 1;
+    }
     const tbody = document.getElementById('detail-entries');
+    const prevPg = document.getElementById('btn-detail-entries-prev');
+    const nextPg = document.getElementById('btn-detail-entries-next');
     tbody.innerHTML = '';
     var skRow =
       '<tr class="table-skeleton-row"><td colspan="5"><div class="skeleton skeleton-inline"></div></td></tr>';
     tbody.innerHTML = skRow + skRow + skRow + skRow + skRow + skRow;
-    const r = await fetch('/api/account/user/' + selectedUserId + '/detail');
+    prevPg.disabled = true;
+    nextPg.disabled = true;
+    const r = await fetch(
+      '/api/account/user/' + selectedUserId + '/detail?page=' + encodeURIComponent(detailEntriesPage)
+    );
     if (r.status === 401) {
       tbody.innerHTML = '';
       pwdModal.classList.remove('hidden');
@@ -352,8 +372,26 @@
       tr.appendChild(tdDur);
       tbody.appendChild(tr);
     });
+    var totalPages = Math.max(1, d.total_pages || 1);
+    if (typeof d.page === 'number') {
+      detailEntriesPage = d.page;
+    }
+    document.getElementById('detail-entries-page-label').textContent =
+      'Page ' + detailEntriesPage + ' of ' + totalPages;
+    prevPg.disabled = detailEntriesPage <= 1;
+    nextPg.disabled = detailEntriesPage >= totalPages;
     return d;
   }
+
+  document.getElementById('btn-detail-entries-prev').addEventListener('click', async function () {
+    if (detailEntriesPage <= 1) return;
+    detailEntriesPage -= 1;
+    await loadDetail(false);
+  });
+  document.getElementById('btn-detail-entries-next').addEventListener('click', async function () {
+    detailEntriesPage += 1;
+    await loadDetail(false);
+  });
 
   function triggerDownload(url) {
     const a = document.createElement('a');
@@ -394,7 +432,7 @@
     }
     okEl.textContent = 'Updated. Download the ID again to get the new picture.';
     okEl.classList.remove('hidden');
-    loadDetail();
+    loadDetail(false);
   });
 
   function openEntryNotePanel(e) {
@@ -423,7 +461,7 @@
       }
     );
     if (r.ok) {
-      await loadDetail();
+      await loadDetail(false);
     } else {
       el.textContent = 'Could not save (session expired?)';
       el.classList.remove('hidden');

@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 {% block body_attrs %} data-page-skeleton="defer"{% endblock %}
 {% block title %}Home — Time Track OJT{% endblock %}
-{% block head_extra %}
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-{% endblock %}
 {% block content %}
 <header class="page-header">
   <h2>Home</h2>
@@ -13,7 +10,10 @@
 <div class="card card--clock">
   <div class="clock-bar">
     <div class="clock-bar__main">
-      <div class="clock-display" id="clock-time">--:--:--</div>
+      <div class="clock-display-row">
+        <div class="clock-display" id="clock-time">--:--:--</div>
+        <span class="clock-tz-badge" title="Official time zone for attendance (Asia/Manila)">PH</span>
+      </div>
       <div class="date-display" id="clock-date">—</div>
     </div>
     <div class="clock-bar__side">
@@ -101,22 +101,59 @@
   const clockActionDismiss = document.getElementById('clock-action-dismiss');
   let clockActionTimer = null;
 
-  async function tickClock() {
+  var clockSkewMs = 0;
+  var clockSynced = false;
+  var manilaTimeFmt = new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  var manilaDateFmt = new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+
+  function renderClockWall(ms) {
+    clockTime.textContent = manilaTimeFmt.format(ms).replace(/\u202f/g, ' ');
+    clockDate.textContent = manilaDateFmt.format(ms);
+  }
+
+  async function syncServerClock() {
     try {
       const r = await fetch('/api/server-time');
       const d = await r.json();
-      clockTime.textContent = d.time_display;
-      clockDate.textContent = d.weekday + ', ' + d.date_display;
+      if (typeof d.utc_ms === 'number' && Number.isFinite(d.utc_ms)) {
+        clockSkewMs = d.utc_ms - Date.now();
+        renderClockWall(d.utc_ms);
+      } else {
+        clockSkewMs = 0;
+        clockTime.textContent = d.time_display || '—';
+        clockDate.textContent = (d.weekday || '') + ', ' + (d.date_display || '');
+      }
     } catch (e) {
-      clockTime.textContent = new Date().toLocaleTimeString();
-      clockDate.textContent = new Date().toDateString();
+      clockSkewMs = 0;
+      renderClockWall(Date.now());
     }
+    clockSynced = true;
     if (window.removePageSkeleton) {
       window.removePageSkeleton();
     }
   }
-  tickClock();
+
+  function tickClock() {
+    if (!clockSynced) return;
+    renderClockWall(Date.now() + clockSkewMs);
+  }
+
+  renderClockWall(Date.now());
+  syncServerClock();
   setInterval(tickClock, 1000);
+  setInterval(syncServerClock, 120000);
 
   function showError(msg) {
     scanError.textContent = msg;
@@ -309,6 +346,28 @@
   }
 
   let html5Qrcode = null;
+  var qrScriptPromise = null;
+
+  function loadHtml5QrcodeScript() {
+    if (typeof Html5Qrcode !== 'undefined') {
+      return Promise.resolve();
+    }
+    if (qrScriptPromise) return qrScriptPromise;
+    qrScriptPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+      s.async = true;
+      s.onload = function () {
+        resolve();
+      };
+      s.onerror = function () {
+        qrScriptPromise = null;
+        reject(new Error('Could not load camera library'));
+      };
+      document.head.appendChild(s);
+    });
+    return qrScriptPromise;
+  }
 
   function setScannerUiRunning(running) {
     btnStartScan.disabled = running;
@@ -350,12 +409,20 @@
     return devices[0].id;
   }
 
-  function startScanner() {
-    if (typeof Html5Qrcode === 'undefined') {
-      showError('QR library failed to load.');
+  async function startScanner() {
+    if (html5Qrcode) return;
+    var prevLabel = btnStartScan.textContent;
+    btnStartScan.disabled = true;
+    btnStartScan.textContent = 'Loading camera…';
+    try {
+      await loadHtml5QrcodeScript();
+    } catch (e) {
+      btnStartScan.disabled = false;
+      btnStartScan.textContent = prevLabel;
+      showError(e.message || 'QR library failed to load.');
       return;
     }
-    if (html5Qrcode) return;
+    btnStartScan.textContent = prevLabel;
     clearError();
     html5Qrcode = new Html5Qrcode('scan-reader');
     var cfg = scanRegionConfig();

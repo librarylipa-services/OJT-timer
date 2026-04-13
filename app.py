@@ -422,13 +422,35 @@ def get_db():
 
 @app.after_request
 def _cache_shell_pages(resp):
+    if request.method != "GET":
+        return resp
+    path = request.path or ""
+    # CSS/JS: long browser cache (URLs are not fingerprinted; bump on deploy if needed).
+    if path.startswith("/static/") and path.endswith(
+        (
+            ".css",
+            ".js",
+            ".mjs",
+            ".ico",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".svg",
+            ".gif",
+        )
+    ):
+        resp.headers.setdefault(
+            "Cache-Control",
+            "public, max-age=86400, stale-while-revalidate=604800",
+        )
+        return resp
     # Make sidebar navigation feel snappy by letting Vercel/edge cache the HTML shell pages.
     # API routes and downloads should not be cached here.
-    if request.method == "GET" and not request.path.startswith("/api/"):
-        if request.path in ("/", "/register", "/account", "/admin"):
-            resp.headers.setdefault(
-                "Cache-Control", "public, s-maxage=120, stale-while-revalidate=600"
-            )
+    if not path.startswith("/api/") and path in ("/", "/register", "/account", "/admin"):
+        resp.headers.setdefault(
+            "Cache-Control", "public, s-maxage=120, stale-while-revalidate=600"
+        )
     return resp
 
 
@@ -749,6 +771,8 @@ def page_admin():
 @app.route("/api/server-time")
 def api_server_time():
     now = now_ph()
+    aware = now.replace(tzinfo=PH_TZ)
+    utc_ms = int(aware.timestamp() * 1000)
     return jsonify(
         {
             "iso": now.isoformat(timespec="seconds"),
@@ -756,6 +780,8 @@ def api_server_time():
             "time_display": now.strftime("%H:%M:%S"),
             "weekday": now.strftime("%A"),
             "tz": "Asia/Manila",
+            # Client uses utc_ms + local clock for 1s ticks; re-sync occasionally to limit load.
+            "utc_ms": utc_ms,
         }
     )
 

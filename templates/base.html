@@ -35,16 +35,18 @@
         </div>
       </div>
       <nav class="sidebar-nav" aria-label="Main">
-        <a href="{{ url_for('page_home') }}" class="{{ 'active' if request.path == '/' else '' }}">Home</a>
-        <a href="{{ url_for('page_register') }}" class="{{ 'active' if request.path == '/register' else '' }}">Register</a>
-        <a href="{{ url_for('page_account') }}" class="{{ 'active' if request.path == '/account' else '' }}">Account</a>
-        <a href="{{ url_for('page_admin') }}" class="{{ 'active' if request.path == '/admin' else '' }}">Admin</a>
+        <a href="{{ url_for('page_home') }}" class="{{ 'active' if request.path == '/' else '' }}"{% if request.path == '/' %} aria-current="page"{% endif %}>Home</a>
+        <a href="{{ url_for('page_register') }}" class="{{ 'active' if request.path == '/register' else '' }}"{% if request.path == '/register' %} aria-current="page"{% endif %}>Register</a>
+        <a href="{{ url_for('page_account') }}" class="{{ 'active' if request.path == '/account' else '' }}"{% if request.path == '/account' %} aria-current="page"{% endif %}>Account</a>
+        <a href="{{ url_for('page_admin') }}" class="{{ 'active' if request.path == '/admin' else '' }}"{% if request.path == '/admin' %} aria-current="page"{% endif %}>Admin</a>
       </nav>
     </aside>
-    <main>
-      <div class="theme-bar">
+    <main class="main-shell">
+      <header class="main-toolbar">
+        <a class="skip-link" href="#main-body">Skip to content</a>
+        <span class="main-toolbar__fill" aria-hidden="true"></span>
         <button type="button" class="secondary theme-toggle" id="theme-toggle" aria-pressed="false" aria-label="Switch to light mode">Light mode</button>
-      </div>
+      </header>
       <div id="page-skeleton-overlay" class="page-skeleton-overlay" aria-busy="true" aria-live="polite" aria-label="Loading page">
         <div class="page-skeleton-shell">
           <div class="page-skeleton-header">
@@ -57,7 +59,9 @@
           <div class="skeleton skeleton-card skeleton-card--short"></div>
         </div>
       </div>
-      {% block content %}{% endblock %}
+      <div id="main-body" class="main-body">
+        {% block content %}{% endblock %}
+      </div>
     </main>
   </div>
   {% if supabase_url and supabase_anon_key %}

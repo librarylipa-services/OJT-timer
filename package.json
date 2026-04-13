@@ -1,8 +1,10 @@
 {
   "name": "ojt-timer",
   "private": true,
+  "type": "module",
   "description": "Flask app; @supabase/supabase-js is for optional browser/client usage (DB still uses DATABASE_URL in Python).",
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.1"
+    "@supabase/supabase-js": "^2.49.1",
+    "@vercel/functions": "^3.4.3"
   }
 }

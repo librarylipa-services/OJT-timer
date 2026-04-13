@@ -1811,6 +1811,43 @@ html[data-theme="light"] .clock-action-modal__badge--out {
   box-shadow: 0 0 0 1px rgba(180, 83, 9, 0.3);
 }
 
+/* Account list: hours pill + progress bar (dark-theme tints were low-contrast on light) */
+html[data-theme="light"] .progress__bar {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+html[data-theme="light"] .progress-pill {
+  background: rgba(15, 23, 42, 0.07);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+html[data-theme="light"] .progress-pill--red {
+  background: rgba(220, 38, 38, 0.12);
+  border-color: rgba(185, 28, 28, 0.35);
+  color: #991b1b;
+}
+
+html[data-theme="light"] .progress-pill--yellow {
+  background: rgba(217, 119, 6, 0.14);
+  border-color: rgba(180, 83, 9, 0.4);
+  color: #92400e;
+}
+
+html[data-theme="light"] .progress-pill--green {
+  background: rgba(5, 150, 105, 0.12);
+  border-color: rgba(4, 120, 87, 0.38);
+  color: #047857;
+}
+
+/* Account detail: spent / left stats */
+html[data-theme="light"] #step-detail .grid-2 > div:has(.stat) {
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.05);
+  border: 1px solid var(--border);
+}
+
 /* Theme cross-fade on common surfaces (toggle is infrequent) */
 .sidebar,
 .card,

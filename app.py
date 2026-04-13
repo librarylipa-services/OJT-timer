@@ -155,6 +155,7 @@ def _inject_supabase_template_vars():
     return {
         "supabase_url": SUPABASE_URL,
         "supabase_anon_key": SUPABASE_ANON_KEY,
+        "is_vercel": os.environ.get("VERCEL") == "1",
     }
 
 

@@ -76,7 +76,9 @@ PH_TZ = ZoneInfo("Asia/Manila")
 
 
 def now_ph():
-    return datetime.now(PH_TZ).replace(tzinfo=None)
+    # Keep seconds=0 so durations don't end up like 9h 59m
+    # when the UI shows clean 08:00 → 17:00.
+    return datetime.now(PH_TZ).replace(tzinfo=None, second=0, microsecond=0)
 
 
 _CACHE = {}
@@ -658,6 +660,19 @@ def parse_dt(value):
     return datetime.fromisoformat(value)
 
 
+def normalize_iso_local_seconds(value):
+    """Normalize an ISO-local datetime string to second=0, microsecond=0."""
+    if value is None:
+        return None
+    if value == "":
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return dt.replace(second=0, microsecond=0).isoformat(timespec="seconds")
+
+
 def seconds_to_hm(total_seconds):
     if total_seconds < 0:
         total_seconds = 0
@@ -671,6 +686,8 @@ def round_time_out(dt):
     """Round time-out up to next full hour when minutes >= 40."""
     if not dt:
         return dt
+    # Always store seconds as 0.
+    dt = dt.replace(second=0, microsecond=0)
     if dt.minute < 40:
         return dt
     base = dt.replace(minute=0, second=0, microsecond=0)
@@ -2385,8 +2402,8 @@ def api_admin_entry_update(entry_id):
     if err:
         return err
     data = request.get_json(silent=True) or {}
-    time_in = data.get("time_in")
-    time_out = data.get("time_out")
+    time_in = normalize_iso_local_seconds(data.get("time_in"))
+    time_out = normalize_iso_local_seconds(data.get("time_out"))
     if time_in is None:
         return jsonify({"error": "time_in required"}), 400
     try:
@@ -2403,8 +2420,6 @@ def api_admin_entry_update(entry_id):
         return jsonify({"error": "Not found"}), 404
 
     tout = time_out if time_out else None
-    if tout == "":
-        tout = None
     sn = data.get("session_note")
     if sn is not None:
         if not isinstance(sn, str):
@@ -2430,8 +2445,8 @@ def api_admin_entry_create(user_id):
     if err:
         return err
     data = request.get_json(silent=True) or {}
-    time_in = data.get("time_in")
-    time_out = data.get("time_out")
+    time_in = normalize_iso_local_seconds(data.get("time_in"))
+    time_out = normalize_iso_local_seconds(data.get("time_out"))
     if not time_in:
         return jsonify({"error": "time_in required"}), 400
     try:
